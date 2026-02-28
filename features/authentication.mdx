@@ -1,0 +1,260 @@
+---
+title: Authentication
+description: User authentication system powered by Lucia
+icon: shield-check
+---
+
+## Overview
+
+Esoteric Network uses [Lucia](https://lucia-auth.com/) for session-based authentication with secure password hashing via Argon2. The authentication system is built on PostgreSQL with Drizzle ORM and supports user registration, login, and session management.
+
+## Authentication Flow
+
+<Steps>
+  <Step title="User Registration">
+    New users provide a username, email, and password. Passwords are hashed using Argon2 before storage.
+  </Step>
+  <Step title="Session Creation">
+    Upon successful authentication, Lucia creates a session and sets a secure HTTP-only cookie.
+  </Step>
+  <Step title="Session Validation">
+    The `validateUser` function checks session cookies on each request and refreshes them when needed.
+  </Step>
+</Steps>
+
+## Lucia Configuration
+
+The authentication adapter connects Lucia with Drizzle and PostgreSQL:
+
+```typescript
+import { Lucia } from "lucia";
+import { DrizzlePostgreSQLAdapter } from "@lucia-auth/adapter-drizzle"
+import { db } from "@/db";
+
+const adapter = new DrizzlePostgreSQLAdapter(db, SessionTable, UserTable)
+
+export const lucia = new Lucia(
+    adapter, {
+    sessionCookie: {
+        expires: false,
+        attributes: {
+            secure: process.env.NODE_ENV === "production"
+        }
+    },
+    getUserAttributes(databaseUserAttributes) {
+        return {
+            email: databaseUserAttributes.email,
+            username: databaseUserAttributes.username,
+            userId: databaseUserAttributes.id,
+            profilePicture: databaseUserAttributes.profileUrl,
+        }
+    },
+})
+```
+
+<Note>
+  Session cookies are set to never expire (`expires: false`) and are only sent over HTTPS in production environments.
+</Note>
+
+## User Registration
+
+The signup flow validates user input, checks for existing accounts, hashes passwords, and creates a new session:
+
+```typescript
+export const SignupUserAction = async ({ formData }: { formData: SIGNUPFORMTYPE }) => {
+    const { userName, email, password } = SIGNUPSCHEMA.parse(formData);
+    
+    // Hash password with Argon2
+    const hashedPassword = await hash(password, {
+        memoryCost: 19456,
+        timeCost: 2,
+        outputLen: 32,
+        parallelism: 1
+    })
+    
+    // Check for existing users
+    const hasUserName = await db.select().from(UserTable)
+        .where(eq(UserTable.username, userName));
+    if (hasUserName.length > 0) {
+        throw new Error("Username already exists");
+    }
+    
+    // Create user and session
+    const userId = await db.insert(UserTable).values({
+        username: userName,
+        email: email,
+        password: hashedPassword
+    }).returning({ userId: UserTable.id });
+    
+    const session = await lucia.createSession(userId[0].userId, {});
+    const sessionCookie = lucia.createSessionCookie(session.id);
+    cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+}
+```
+
+### Validation Schema
+
+User input is validated with Zod schemas:
+
+```typescript
+export const SIGNUPSCHEMA = object({
+    email: string({ required_error: "Email is required" })
+        .min(1, "Email is required")
+        .email("Invalid email"),
+    password: string({ required_error: "Password is required" })
+        .min(8, "Password must be more than 8 characters")
+        .max(32, "Password must be less than 32 characters"),
+    userName: string({ required_error: "UserName is required" })
+        .min(1, "UserName is required")
+        .max(32, "UserName must be less than 32 characters"),
+})
+```
+
+<Warning>
+  Usernames and emails must be unique. The system checks for duplicates before creating new accounts.
+</Warning>
+
+## User Login
+
+The signin process verifies credentials and establishes a new session:
+
+```typescript
+export const SigninUserAction = async ({ formData }: { formData: SIGNINFORMTYPE }) => {
+    const { email, password } = SIGNINSCHEMA.parse(formData);
+    
+    // Find user by email
+    const existingUser = await db.select().from(UserTable)
+        .where(eq(UserTable.email, email));
+    if (existingUser.length === 0) {
+        throw new Error("User not found");
+    }
+    
+    // Verify password
+    const validPassword = await verify(existingUser[0].password, password, {
+        memoryCost: 19456,
+        timeCost: 2,
+        outputLen: 32,
+        parallelism: 1
+    });
+    if (!validPassword) {
+        throw new Error("Wrong password");
+    }
+    
+    // Create session
+    const session = await lucia.createSession(existingUser[0].id, {});
+    const sessionCookie = lucia.createSessionCookie(session.id);
+    cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+}
+```
+
+## Session Validation
+
+The `validateUser` function runs on server-side requests to validate and refresh sessions:
+
+```typescript
+export const validateUser = cache(
+    async (): Promise<{ user: User; session: Session } | { user: null; session: null }> => {
+        const sessionId = cookies().get(lucia.sessionCookieName)?.value ?? null;
+        if (!sessionId) {
+            return { user: null, session: null };
+        }
+
+        const result = await lucia.validateSession(sessionId);
+        
+        try {
+            // Refresh session cookie if it's fresh
+            if (result.session && result.session.fresh) {
+                const sessionCookie = lucia.createSessionCookie(result.session.id);
+                cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+            }
+            // Clear invalid sessions
+            if (!result.session) {
+                const sessionCookie = lucia.createBlankSessionCookie();
+                cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+            }
+        } catch { }
+        return result;
+    }
+);
+```
+
+<Info>
+  The function is wrapped with React's `cache` to deduplicate requests during server-side rendering.
+</Info>
+
+## User Logout
+
+Logging out invalidates the session and clears the session cookie:
+
+```typescript
+export const SignoutUserAction = async () => {
+    const { session } = await validateUser()
+    await lucia.invalidateSession(session?.id!)
+    const sessionCookie = lucia.createBlankSessionCookie();
+    cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+}
+```
+
+## Database Schema
+
+The user and session tables are defined with Drizzle ORM:
+
+```typescript
+export const UserTable = pgTable("user", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    username: text("username").notNull(),
+    email: text("email").notNull(),
+    password: text("password").notNull(),
+    bio: text("bio"),
+    profileUrl: text("profile_url"),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+
+export const SessionTable = pgTable("session", {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+        .notNull()
+        .references(() => UserTable.id),
+    expiresAt: timestamp("expires_at", {
+        withTimezone: true,
+        mode: "date"
+    }).notNull()
+});
+```
+
+<Tip>
+  User IDs are generated using CUID2 for better performance and security compared to UUIDs.
+</Tip>
+
+## Security Features
+
+<AccordionGroup>
+  <Accordion title="Password Hashing">
+    Passwords are hashed with Argon2, the winner of the Password Hashing Competition. The configuration uses:
+    - **Memory cost**: 19456 KiB
+    - **Time cost**: 2 iterations
+    - **Output length**: 32 bytes
+    - **Parallelism**: 1 thread
+  </Accordion>
+
+  <Accordion title="Session Security">
+    - Sessions are stored in PostgreSQL with expiration timestamps
+    - Cookies are HTTP-only and secure in production
+    - Sessions are automatically refreshed when fresh
+    - Invalid sessions are immediately cleared
+  </Accordion>
+
+  <Accordion title="Input Validation">
+    All user input is validated with Zod schemas before processing:
+    - Email format validation
+    - Password length requirements (8-32 characters)
+    - Username length limits (1-32 characters)
+  </Accordion>
+</AccordionGroup>

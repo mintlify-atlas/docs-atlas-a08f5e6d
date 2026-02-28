@@ -1,0 +1,328 @@
+---
+title: 'User Actions'
+description: 'Server actions for user authentication, registration, and profile management'
+---
+
+## SignupUserAction
+
+Creates a new user account with username, email, and password.
+
+```typescript
+await SignupUserAction({ 
+  formData: {
+    userName: "johndoe",
+    email: "john@example.com",
+    password: "securePassword123"
+  }
+});
+```
+
+### Parameters
+
+<ParamField path="formData" type="SIGNUPFORMTYPE" required>
+  Object containing user registration data
+</ParamField>
+
+<ParamField path="formData.userName" type="string" required>
+  Unique username for the account
+</ParamField>
+
+<ParamField path="formData.email" type="string" required>
+  Valid email address for the account
+</ParamField>
+
+<ParamField path="formData.password" type="string" required>
+  Password for the account (will be hashed with Argon2)
+</ParamField>
+
+### Returns
+
+This action automatically redirects to `/home` upon success and does not return a value.
+
+### Behavior
+
+- Validates form data against `SIGNUPSCHEMA` using Zod
+- Hashes password using Argon2 with secure parameters:
+  - Memory cost: 19456
+  - Time cost: 2
+  - Output length: 32
+  - Parallelism: 1
+- Checks for existing username and email
+- Creates user record in database
+- Creates session using Lucia auth
+- Sets session cookie
+- Redirects to `/home`
+
+<Warning>
+  Username and email must be unique. The action will throw an error if either already exists in the database.
+</Warning>
+
+### Error Handling
+
+```typescript
+try {
+  await SignupUserAction({ formData });
+} catch (error) {
+  if (error.message === "Username already exists") {
+    // Handle duplicate username
+  } else if (error.message === "Email already exists") {
+    // Handle duplicate email
+  } else {
+    // Handle validation errors
+  }
+}
+```
+
+<Expandable title="Common Errors">
+  - `"Username already exists"` - Username is already taken
+  - `"Email already exists"` - Email is already registered
+  - Zod validation errors - Invalid format for username, email, or password
+</Expandable>
+
+---
+
+## SigninUserAction
+
+Authenticates a user with email and password.
+
+```typescript
+await SigninUserAction({ 
+  formData: {
+    email: "john@example.com",
+    password: "securePassword123"
+  }
+});
+```
+
+### Parameters
+
+<ParamField path="formData" type="SIGNINFORMTYPE" required>
+  Object containing login credentials
+</ParamField>
+
+<ParamField path="formData.email" type="string" required>
+  Email address of the account
+</ParamField>
+
+<ParamField path="formData.password" type="string" required>
+  Password for the account
+</ParamField>
+
+### Returns
+
+This action automatically redirects to `/polls` upon success and does not return a value.
+
+### Behavior
+
+- Validates form data against `SIGNINSCHEMA` using Zod
+- Looks up user by email address
+- Verifies password using Argon2 with matching parameters
+- Creates new session using Lucia auth
+- Sets session cookie
+- Redirects to `/polls`
+
+### Error Handling
+
+```typescript
+try {
+  await SigninUserAction({ formData });
+} catch (error) {
+  if (error.message === "User not found") {
+    // Handle non-existent user
+  } else if (error.message === "Wrong password") {
+    // Handle incorrect password
+  }
+}
+```
+
+<Expandable title="Authentication Errors">
+  - `"User not found"` - No account exists with the provided email
+  - `"Wrong password"` - Password does not match stored hash
+  - Zod validation errors - Invalid email or password format
+</Expandable>
+
+<Note>
+  Password verification uses the same Argon2 parameters as signup for consistency and security.
+</Note>
+
+---
+
+## SignoutUserAction
+
+Ends the current user session and logs out the user.
+
+```typescript
+await SignoutUserAction();
+```
+
+### Parameters
+
+This action takes no parameters.
+
+### Returns
+
+This action automatically redirects to `/` upon completion and does not return a value.
+
+### Behavior
+
+- Validates current user session
+- Invalidates the session in Lucia auth
+- Creates blank session cookie to clear authentication
+- Sets the blank cookie to remove session data
+- Redirects to home page (`/`)
+
+### Error Handling
+
+```typescript
+try {
+  await SignoutUserAction();
+} catch (error) {
+  console.error("Signout failed:", error.message);
+  // User will still be redirected to home page
+}
+```
+
+<Note>
+  The redirect happens in the `finally` block, so users are redirected even if an error occurs during session invalidation.
+</Note>
+
+---
+
+## UpdateUserImageAction
+
+Updates the user's profile image URL.
+
+```typescript
+await UpdateUserImageAction({ 
+  image: "https://example.com/avatar.jpg" 
+});
+```
+
+### Parameters
+
+<ParamField path="image" type="string" required>
+  URL or path to the new profile image
+</ParamField>
+
+### Returns
+
+This action does not return a value (`void`).
+
+### Behavior
+
+- Validates current user session
+- Updates the `profileUrl` field in the user's database record
+- Revalidates the `/profile/{userId}` path to show updated image
+
+### Error Handling
+
+```typescript
+try {
+  await UpdateUserImageAction({ image: imageUrl });
+} catch (error) {
+  console.error("Failed to update image:", error.message);
+}
+```
+
+<Expandable title="Common Errors">
+  - Authentication errors if user session is invalid
+  - Database update errors
+</Expandable>
+
+---
+
+## UpdateUserAction
+
+Updates the user's username and bio.
+
+```typescript
+await UpdateUserAction({ 
+  username: "newusername",
+  bio: "This is my updated bio" 
+});
+```
+
+### Parameters
+
+<ParamField path="username" type="string" required>
+  New username for the user
+</ParamField>
+
+<ParamField path="bio" type="string" required>
+  New biography text for the user profile
+</ParamField>
+
+### Returns
+
+This action does not return a value (`void`).
+
+### Behavior
+
+- Validates current user session
+- Checks if the new username already exists
+- Updates both username and bio fields
+- Revalidates the `/profile/{userId}` path
+
+<Warning>
+  If the username already exists, the action will throw an error. Ensure username uniqueness before calling this action.
+</Warning>
+
+### Error Handling
+
+```typescript
+try {
+  await UpdateUserAction({ username, bio });
+} catch (error) {
+  if (error.message === "Username already exists") {
+    // Handle duplicate username
+  }
+}
+```
+
+<Expandable title="Validation Errors">
+  - `"Username already exists"` - Another user already has this username
+  - Authentication errors if user session is invalid
+  - Database update errors
+</Expandable>
+
+---
+
+## Implementation Details
+
+### Source Location
+
+`~/workspace/source/server/actions/user.ts`
+
+### Authentication
+
+All actions use **Lucia** for session management with the following features:
+
+- Secure session creation and invalidation
+- HTTP-only session cookies
+- Automatic cookie management
+
+### Password Security
+
+Passwords are hashed using **Argon2** (via `@node-rs/argon2`) with the following parameters:
+
+```typescript
+{
+  memoryCost: 19456,
+  timeCost: 2,
+  outputLen: 32,
+  parallelism: 1
+}
+```
+
+These parameters provide strong protection against brute-force attacks.
+
+### Validation
+
+Form data is validated using **Zod schemas**:
+
+- `SIGNUPSCHEMA`: Validates username, email, and password format
+- `SIGNINSCHEMA`: Validates email and password format
+
+<Note>
+  All actions use `"use server"` directive and run exclusively on the server side. Client-side code cannot access sensitive operations like password hashing or direct database access.
+</Note>

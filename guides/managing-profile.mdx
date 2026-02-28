@@ -1,0 +1,361 @@
+---
+title: Managing Your Profile
+description: Learn how to update your profile information, change your profile picture, and customize your presence on Esoteric Network
+---
+
+This guide covers all aspects of managing your user profile on Esoteric Network, including updating your username, bio, and profile picture.
+
+## Profile Overview
+
+Your profile displays:
+- Profile picture (avatar)
+- Username
+- Bio (up to 140 characters)
+- Your published posts
+
+Profile pages are located at `/profile/[userId]` and can be accessed by you and other users.
+
+## Editing Your Profile
+
+The profile editor is implemented in `app/profile/[slugId]/edit-profile.tsx` and provides a responsive dialog interface:
+
+<Steps>
+
+### Open the Edit Profile Dialog
+
+Click the "Edit Profile" button on your profile page. The interface adapts based on screen size:
+
+```typescript
+const isDesktop = useMediaQuery("(min-width: 768px)")
+
+if (isDesktop) {
+    return (
+        <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+                <Button variant="outline">Edit Profile</Button>
+            </DialogTrigger>
+            {/* Dialog content */}
+        </Dialog>
+    )
+} else {
+    return (
+        <Drawer>
+            <DrawerTrigger asChild>
+                <Button variant="outline">Edit Profile</Button>
+            </DrawerTrigger>
+            {/* Drawer content */}
+        </Drawer>
+    )
+}
+```
+
+<Info>On desktop, a dialog appears. On mobile devices, a drawer slides up from the bottom for better touch interaction.</Info>
+
+### Update Your Profile Picture
+
+The profile picture editor uses a drag-and-drop interface with image cropping:
+
+```typescript
+const { getRootProps, getInputProps } = useDropzone({
+    onDrop,
+    accept: {
+        "image/*": [],
+    },
+});
+
+return (
+    <Avatar
+        {...getRootProps()}
+        className="size-20 cursor-pointer ring-offset-2 ring-2 ring-slate-200"
+    >
+        <input {...getInputProps()} />
+        <AvatarImage src={profileUrl ?? ""} alt={userName} />
+        <AvatarFallback>{userName}</AvatarFallback>
+    </Avatar>
+);
+```
+
+To update your profile picture:
+1. Click on your current avatar or drag an image onto it
+2. The image cropper dialog will open automatically
+3. Adjust the crop area to frame your image
+4. Click "Crop" to save the changes
+
+<Warning>Large images will be rejected. Choose an appropriate file size for your profile picture.</Warning>
+
+### Crop Your Image
+
+The image cropper (`image-cropper.tsx`) provides a 1:1 aspect ratio crop:
+
+```typescript
+function getCroppedImg(image: HTMLImageElement, crop: PixelCrop): string {
+    const canvas = document.createElement("canvas")
+    const scaleX = image.naturalWidth / image.width
+    const scaleY = image.naturalHeight / image.height
+
+    canvas.width = crop.width * scaleX
+    canvas.height = crop.height * scaleY
+
+    const ctx = canvas.getContext("2d")
+    if (ctx) {
+        ctx.imageSmoothingEnabled = false
+        ctx.drawImage(
+            image,
+            crop.x * scaleX,
+            crop.y * scaleY,
+            crop.width * scaleX,
+            crop.height * scaleY,
+            0, 0,
+            crop.width * scaleX,
+            crop.height * scaleY,
+        )
+    }
+    return canvas.toDataURL("image/png", 1.0)
+}
+```
+
+Features:
+- Square crop area (1:1 aspect ratio)
+- High-quality PNG output
+- Image smoothing disabled for crisp results
+- Real-time crop preview
+
+<Tip>Center the most important part of your image in the crop area for the best profile picture.</Tip>
+
+### Update Username and Bio
+
+The profile form uses React Hook Form with Zod validation:
+
+```typescript
+const formSchema = z.object({
+    username: z.string().min(2).max(50),
+    bio: z.string().min(2).max(140),
+})
+
+const form = useForm<z.infer<typeof formSchema>>({
+    resolver: zodResolver(formSchema),
+    defaultValues: {
+        username: user.username,
+        bio: user.bio ?? "",
+    },
+})
+```
+
+Validation rules:
+- **Username**: 2-50 characters, must be unique
+- **Bio**: 2-140 characters
+
+The form fields:
+
+```tsx
+<FormField
+    control={form.control}
+    name="username"
+    render={({ field }) => (
+        <FormItem className="grid grid-cols-4 items-center gap-4">
+            <FormLabel htmlFor="username" className="text-right">
+                Username
+            </FormLabel>
+            <FormControl>
+                <Input id="Username" {...field} 
+                    className="col-span-3" 
+                    placeholder="Enter your username" 
+                />
+            </FormControl>
+            <FormMessage />
+        </FormItem>
+    )}
+/>
+```
+
+<Info>Validation errors appear automatically below each field when you enter invalid data.</Info>
+
+### Save Your Changes
+
+Submit the form to save changes:
+
+```typescript
+const { mutateAsync: updateUser, isPending } = useMutation({
+    mutationFn: async (values: z.infer<typeof formSchema>) => {
+        await UpdateUserAction({ 
+            username: values.username, 
+            bio: values.bio 
+        })
+    },
+    onError: (error) => {
+        toast({
+            title: "Error",
+            description: error.message,
+            variant: "destructive",
+        })
+    },
+    onSuccess: () => {
+        toast({
+            title: "Success",
+            description: "User updated successfully",
+            variant: "default",
+        })
+    },
+})
+
+async function onSubmit(values: z.infer<typeof formSchema>) {
+    await updateUser(values)
+    setOpen(false)
+}
+```
+
+The button shows loading state during submission:
+
+```tsx
+<Button type="submit" disabled={updateUserPending}>
+    {updateUserPending && <Loader2 className="mr-2 animate-spin" />}
+    Save changes
+</Button>
+```
+
+</Steps>
+
+## Server-Side Profile Updates
+
+Profile updates are handled by server actions with authentication and validation.
+
+### Updating Profile Information
+
+The `UpdateUserAction` handles username and bio updates:
+
+```typescript
+// server/actions/user.ts
+export const UpdateUserAction = async ({ 
+    username, 
+    bio 
+}: { 
+    username: string, 
+    bio: string 
+}) => {
+    try {
+        const { user } = await validateUser()
+        
+        // Check if username is already taken
+        const userAlreadyExists = await db
+            .select()
+            .from(UserTable)
+            .where(eq(UserTable.username, username))
+            
+        if (userAlreadyExists.length > 0) {
+            throw new Error("Username already exists");
+        }
+        
+        await db
+            .update(UserTable)
+            .set({ bio, username })
+            .where(eq(UserTable.id, user?.id))
+            
+        revalidatePath(`/profile/${user?.id}`)
+    } catch (e) {
+        throw new Error(e.message)
+    }
+}
+```
+
+Key features:
+- User authentication required
+- Username uniqueness validation
+- Automatic page revalidation after update
+
+<Warning>If the username is already taken, you'll receive an error and need to choose a different one.</Warning>
+
+### Updating Profile Picture
+
+The `UpdateUserImageAction` handles avatar updates:
+
+```typescript
+export const UpdateUserImageAction = async ({ 
+    image 
+}: { 
+    image: string 
+}) => {
+    try {
+        const { user } = await validateUser()
+        await db
+            .update(UserTable)
+            .set({ profileUrl: image })
+            .where(eq(UserTable.id, user?.id))
+            
+        revalidatePath(`/profile/${user?.id}`)
+    } catch (e) {
+        throw new Error(e.message)
+    }
+}
+```
+
+The image is stored as a base64-encoded data URL:
+- Format: `data:image/png;base64,...`
+- Quality: 1.0 (maximum quality)
+- Type: PNG for transparency support
+
+## Profile Data Structure
+
+Your profile data includes:
+
+```typescript
+interface EditProfileProps {
+    user: { 
+        username: string;
+        profileUrl: string | null;
+        bio: string | null;
+        userId: string
+    },
+}
+```
+
+- `username`: Display name (2-50 characters)
+- `profileUrl`: Base64 image data or null
+- `bio`: Short description (2-140 characters)
+- `userId`: Unique identifier
+
+## Toast Notifications
+
+The profile editor provides feedback through toast notifications:
+
+**Success message:**
+```typescript
+toast({
+    title: "Success",
+    description: "User updated successfully",
+    variant: "default",
+})
+```
+
+**Error message:**
+```typescript
+toast({
+    title: "Error",
+    description: error.message,
+    variant: "destructive",
+})
+```
+
+<Info>Notifications appear in the top-right corner and automatically disappear after a few seconds.</Info>
+
+## Best Practices
+
+1. **Choose a clear profile picture**: Use a high-contrast image that's recognizable at small sizes
+2. **Keep your bio concise**: The 140-character limit encourages focused descriptions
+3. **Use a unique username**: Pick something memorable that represents you
+4. **Update regularly**: Keep your profile information current
+
+## Common Issues
+
+**Username already exists**: Choose a different username that's not taken
+
+**Image too large**: Resize your image before uploading or choose a smaller file
+
+**Form validation errors**: Ensure username and bio meet the length requirements (2-50 characters for username, 2-140 for bio)
+
+**Image crop not saving**: Make sure to click the "Crop" button after adjusting the crop area
+
+## Next Steps
+
+- Learn about [Creating Posts](/guides/creating-posts)
+- Explore the [TipTap Editor](/guides/using-editor) features
+- View and manage your published posts

@@ -1,0 +1,217 @@
+---
+title: 'Session Management'
+description: 'Detailed session authentication and lifecycle management'
+---
+
+## Overview
+
+The SessionTable provides robust session management for user authentication. Sessions are time-bound tokens that link authenticated users to their active sessions across devices and browsers.
+
+## Schema Structure
+
+```typescript
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { UserTable } from "./user";
+
+export const SessionTable = pgTable("session", {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+        .notNull()
+        .references(() => UserTable.id),
+    expiresAt: timestamp("expires_at", {
+        withTimezone: true,
+        mode: "date"
+    }).notNull()
+});
+```
+
+## Field Specifications
+
+<ParamField path="id" type="text" required>
+  The session token used as the primary identifier. This should be a cryptographically secure random string generated on the server.
+  
+  **Security Note**: Never expose session IDs in URLs or logs. Always transmit via secure HTTP-only cookies.
+</ParamField>
+
+<ParamField path="userId" type="text" required>
+  Foreign key linking to `UserTable.id`. Establishes which user account owns this session.
+  
+  When a user is deleted, all associated sessions are automatically invalidated through foreign key constraints.
+</ParamField>
+
+<ParamField path="expiresAt" type="timestamp" required>
+  Expiration timestamp with timezone support. After this time, the session is considered invalid.
+  
+  Common expiration patterns:
+  - Short-lived sessions: 15-30 minutes
+  - Standard sessions: 24 hours
+  - Extended sessions: 7-30 days ("remember me" functionality)
+</ParamField>
+
+## Session Lifecycle
+
+### Creating Sessions
+
+When a user successfully authenticates, create a new session:
+
+```typescript
+import { db } from "./db";
+import { SessionTable } from "./schema/user";
+import { generateId } from "lucia"; // or your preferred token generator
+
+async function createSession(userId: string, expiresInDays: number = 1) {
+  const sessionId = generateId(40); // Generate secure token
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + expiresInDays);
+
+  const [session] = await db.insert(SessionTable).values({
+    id: sessionId,
+    userId: userId,
+    expiresAt: expiresAt
+  }).returning();
+
+  return session;
+}
+```
+
+<Note>
+  Always use cryptographically secure random token generation. Libraries like `lucia`, `nanoid`, or Node's `crypto.randomBytes` are recommended.
+</Note>
+
+### Validating Sessions
+
+On each authenticated request, validate the session token:
+
+```typescript
+import { db } from "./db";
+import { SessionTable, UserTable } from "./schema/user";
+import { eq } from "drizzle-orm";
+
+async function validateSession(sessionId: string) {
+  const result = await db
+    .select({
+      session: SessionTable,
+      user: UserTable
+    })
+    .from(SessionTable)
+    .innerJoin(UserTable, eq(SessionTable.userId, UserTable.id))
+    .where(eq(SessionTable.id, sessionId));
+
+  if (result.length === 0) {
+    return { session: null, user: null };
+  }
+
+  const { session, user } = result[0];
+
+  // Check expiration
+  if (Date.now() >= session.expiresAt.getTime()) {
+    await db.delete(SessionTable).where(eq(SessionTable.id, sessionId));
+    return { session: null, user: null };
+  }
+
+  // Optional: Refresh session if close to expiry
+  const shouldRefresh = Date.now() >= session.expiresAt.getTime() - (1000 * 60 * 60 * 24 * 7); // 7 days before expiry
+  if (shouldRefresh) {
+    const newExpiresAt = new Date();
+    newExpiresAt.setDate(newExpiresAt.getDate() + 30);
+    
+    await db
+      .update(SessionTable)
+      .set({ expiresAt: newExpiresAt })
+      .where(eq(SessionTable.id, sessionId));
+    
+    session.expiresAt = newExpiresAt;
+  }
+
+  return { session, user };
+}
+```
+
+### Invalidating Sessions
+
+<Expandable title="Single Session Logout">
+
+```typescript
+import { db } from "./db";
+import { SessionTable } from "./schema/user";
+import { eq } from "drizzle-orm";
+
+async function deleteSession(sessionId: string) {
+  await db
+    .delete(SessionTable)
+    .where(eq(SessionTable.id, sessionId));
+}
+```
+
+</Expandable>
+
+<Expandable title="Logout All Devices">
+
+```typescript
+import { db } from "./db";
+import { SessionTable } from "./schema/user";
+import { eq } from "drizzle-orm";
+
+async function deleteAllUserSessions(userId: string) {
+  await db
+    .delete(SessionTable)
+    .where(eq(SessionTable.userId, userId));
+}
+```
+
+</Expandable>
+
+### Cleanup Expired Sessions
+
+Periodically remove expired sessions to keep the database clean:
+
+```typescript
+import { db } from "./db";
+import { SessionTable } from "./schema/user";
+import { lt } from "drizzle-orm";
+
+async function cleanupExpiredSessions() {
+  const now = new Date();
+  
+  const result = await db
+    .delete(SessionTable)
+    .where(lt(SessionTable.expiresAt, now));
+  
+  return result.rowCount; // Number of deleted sessions
+}
+
+// Run this as a scheduled job (e.g., daily cron)
+```
+
+<Note>
+  Schedule this cleanup task to run at least once per day using a cron job or scheduled worker. This prevents session table bloat and maintains database performance.
+</Note>
+
+## Security Best Practices
+
+<ResponseField name="Token Storage" type="security">
+  Store session tokens in HTTP-only, Secure, SameSite cookies. Never store in localStorage or sessionStorage where they're accessible to JavaScript.
+</ResponseField>
+
+<ResponseField name="Token Generation" type="security">
+  Use at least 32 bytes (256 bits) of cryptographically secure randomness for session IDs. Avoid predictable patterns or sequential IDs.
+</ResponseField>
+
+<ResponseField name="HTTPS Only" type="security">
+  Always transmit session tokens over HTTPS. Set the Secure flag on cookies to prevent transmission over unencrypted connections.
+</ResponseField>
+
+<ResponseField name="Session Fixation" type="security">
+  Generate a new session ID after successful login. Never reuse session IDs from unauthenticated states.
+</ResponseField>
+
+## Relationship Diagram
+
+```
+UserTable (1) ────────── (*) SessionTable
+    │                           │
+    │                           │
+    id ◄────────────────── userId
+```
+
+Each user can have multiple concurrent sessions (multi-device support), but each session belongs to exactly one user.

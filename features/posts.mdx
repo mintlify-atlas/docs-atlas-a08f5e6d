@@ -1,0 +1,224 @@
+---
+title: Posts
+description: Content creation and management system
+icon: newspaper
+---
+
+## Overview
+
+The post system allows authenticated users to create, edit, and delete content. Posts consist of a title and rich text content, and are displayed with engagement metrics like like counts.
+
+## Post Creation
+
+Users can create new posts by providing a title and content. Each post is automatically associated with the authenticated user:
+
+```typescript
+export const CreatePostAction = async ({ title, content }: { title: string, content: string }) => {
+    const { user } = await validateUser()
+    const postId = await db.insert(PostTable).values({
+        title: title!,
+        content: content!,
+        userId: user?.id!
+    }).returning({ postId: PostTable.id });
+    revalidatePath("/home")
+    return postId[0].postId
+}
+```
+
+<Info>
+  The function returns the new post ID, allowing the UI to redirect users to their newly created post.
+</Info>
+
+### Creating a Post
+
+<Steps>
+  <Step title="Navigate to Create Post">
+    Users access the post creation interface from the home page or navigation menu.
+  </Step>
+  <Step title="Enter Content">
+    Fill in the post title and compose content in the rich text editor.
+  </Step>
+  <Step title="Submit">
+    The post is saved to the database and the home feed is revalidated to show the new content.
+  </Step>
+</Steps>
+
+## Post Editing
+
+Post authors can update their existing posts. The system validates ownership and updates the `updatedAt` timestamp:
+
+```typescript
+export const EditPostAction = async ({ title, content, postId }: { title: string, content: string, postId: string }) => {
+    if (title === undefined || content === undefined) {
+        throw new Error("Title and content are required")
+    }
+    const { user } = await validateUser()
+    await db.update(PostTable).set({
+        title: title!,
+        content: content!,
+        userId: user?.id!,
+        updatedAt: new Date()
+    }).where(eq(PostTable.id, postId))
+    revalidatePath("/post/" + postId)
+}
+```
+
+<Warning>
+  Title and content are required fields. The action throws an error if either is missing or undefined.
+</Warning>
+
+## Post Deletion
+
+Users can delete their own posts. The system verifies ownership before deletion and also removes associated likes:
+
+```typescript
+export const DeletePostAction = async ({ postId }: { postId: string }) => {
+    const { user } = await validateUser()
+    const post = await db.select({ userId: PostTable.userId })
+        .from(PostTable)
+        .where(eq(PostTable.id, postId))
+    
+    if (post[0].userId !== user?.id) {
+        throw new Error("You are not authorized to delete this post")
+    }
+    if (post[0] === undefined) {
+        throw new Error("Post not found")
+    }
+    
+    // Delete associated likes first
+    await db.delete(LikeTable).where(eq(LikeTable.postId, postId));
+    await db.delete(PostTable).where(eq(PostTable.id, postId))
+    
+    revalidatePath("/profile/" + user?.id)
+    revalidatePath("/home")
+}
+```
+
+<Note>
+  Deleting a post also removes all associated likes to maintain referential integrity. Both the user profile and home feed are revalidated after deletion.
+</Note>
+
+## Post Display
+
+Posts are rendered with their title, like count, and creation date. The component fetches real-time like counts from the database:
+
+```typescript
+export const RenderPosts = async ({ postTitle, postId, postCreated }
+    : { postTitle: string, postId: string, postCreated: string }) => {
+    const likeCount = await db.select({ count: count() })
+        .from(LikeTable)
+        .where(and(eq(LikeTable.postId, postId), eq(LikeTable.isLiked, true)))
+    return (
+        <Section className="flex flex-row align-middle justify-between w-full">
+            <div className="flex flex-col">
+                <Link
+                    href={`/post/${postId}`}
+                    className="scroll-m-20 text-lg underline font-semibold tracking-tight">
+                    {postTitle}
+                </Link>
+                <p className="leading-7 flex gap-4">
+                    <TrendingUp className="text-green-500" /> {likeCount[0].count}
+                </p>
+            </div>
+            <p className="text-gray-500">
+                {postCreated}
+            </p>
+        </Section>
+    )
+}
+```
+
+### Post Display Features
+
+<AccordionGroup>
+  <Accordion title="Like Counter">
+    Each post displays the total number of active likes. The count is calculated in real-time by querying the `LikeTable` where `isLiked` is true.
+  </Accordion>
+
+  <Accordion title="Trending Indicator">
+    Posts show a green trending-up icon next to the like count to visualize engagement at a glance.
+  </Accordion>
+
+  <Accordion title="Clickable Links">
+    Post titles are underlined links that navigate to the full post view at `/post/{postId}`.
+  </Accordion>
+</AccordionGroup>
+
+## Database Schema
+
+Posts are stored with unique IDs, timestamps, and foreign keys to users:
+
+```typescript
+export const PostTable = pgTable("post", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    userId: text("user_id").notNull().references(() => UserTable.id)
+});
+```
+
+<Tip>
+  Post IDs use CUID2 for better database performance and sortability compared to UUIDs.
+</Tip>
+
+## Path Revalidation
+
+All post mutations trigger Next.js path revalidation to ensure users see the latest content:
+
+<Tabs>
+  <Tab title="Create Post">
+    ```typescript
+    revalidatePath("/home")
+    ```
+    Revalidates the home feed to show the new post immediately.
+  </Tab>
+  <Tab title="Edit Post">
+    ```typescript
+    revalidatePath("/post/" + postId)
+    ```
+    Revalidates the specific post page to reflect updates.
+  </Tab>
+  <Tab title="Delete Post">
+    ```typescript
+    revalidatePath("/profile/" + user?.id)
+    revalidatePath("/home")
+    ```
+    Revalidates both the user profile and home feed to remove the deleted post.
+  </Tab>
+</Tabs>
+
+## User Workflows
+
+### Creating Your First Post
+
+1. Ensure you're logged in (check for your profile avatar in the header)
+2. Click the "Create Post" or "+" button
+3. Enter a descriptive title for your post
+4. Compose your content using the rich text editor
+5. Click "Publish" to share your post with the community
+
+### Editing a Post
+
+1. Navigate to your post (from your profile or the home feed)
+2. Click the "Edit" button (only visible on your own posts)
+3. Modify the title or content as needed
+4. Save changes to update the post
+
+### Deleting a Post
+
+1. Open the post you want to delete
+2. Click the "Delete" button
+3. Confirm the deletion (note: this action cannot be undone)
+4. The post and all its likes will be permanently removed
+
+<Warning>
+  Post deletion is permanent and cannot be undone. All associated likes are also deleted.
+</Warning>

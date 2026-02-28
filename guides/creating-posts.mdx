@@ -1,0 +1,151 @@
+---
+title: Creating Posts
+description: Learn how to create and publish posts on Esoteric Network using the built-in editor
+---
+
+This guide walks you through creating posts on Esoteric Network, from accessing the editor to publishing your content.
+
+## Overview
+
+Esoteric Network uses a powerful TipTap-based rich text editor that allows you to create posts with formatted text, images, links, code blocks, and embedded YouTube videos. Posts are stored in JSON format and associated with your user account.
+
+<Steps>
+
+### Navigate to the Editor
+
+Access the post creation page at `/create` in your application. The editor component is located in:
+
+```typescript
+// app/create/editor.tsx
+export const EditorComponent = () => {
+    const [value, setValue] = useState<string>();
+    const [title, setTitle] = useState("");
+    // ...
+}
+```
+
+### Enter Your Post Title
+
+The title input field appears at the top of the editor. It accepts text and displays with large, underlined formatting:
+
+```tsx
+<Input 
+    placeholder="Enter your Title"
+    onChange={(e) => setTitle(e.target.value)}
+    className="text-xl md:text-4xl h-[60px] border-none underline"
+/>
+```
+
+<Tip>Choose a descriptive title that accurately represents your post content. Titles are required for post creation.</Tip>
+
+### Add Your Content
+
+The `MinimalTiptapEditor` component provides the main content editing area with a full toolbar of formatting options:
+
+```tsx
+<MinimalTiptapEditor
+    value={value}
+    onValueChange={setValue}
+    outputValue="json"
+    disabled={false}
+    contentClass="mt-8"
+/>
+```
+
+The editor automatically converts your content to JSON format when you type, preserving all formatting and structure.
+
+### Format Your Text
+
+Use the toolbar to apply formatting:
+
+- **Text Styles**: Choose from Normal Text, Heading 1-6
+- **Text Formatting**: Bold, Italic, Strikethrough, Code
+- **Lists**: Numbered lists, Bullet lists
+- **Media**: Insert images, links, YouTube videos
+- **Code Blocks**: Add syntax-highlighted code blocks
+
+<Info>You can also select text to reveal a bubble menu with quick formatting options for Bold, Italic, and Strikethrough.</Info>
+
+### Publish Your Post
+
+Once you've finished writing, click the "Create Post" button. The post creation process:
+
+```typescript
+const { mutateAsync: INTERNAL__createPost, isPending } = useMutation({
+    mutationFn: async () => {
+        const content = JSON.stringify(value)
+        const postId = await CreatePostAction({ title, content: content })
+        return postId
+    },
+    onSuccess(data) {
+        toast({
+            title: "Post created",
+            description: "Your post has been created",
+        });
+        router.push(`/post/${data}`)
+    }
+});
+```
+
+The system will:
+1. Serialize your content to JSON
+2. Call the `CreatePostAction` server action
+3. Store the post in the database with your user ID
+4. Redirect you to the published post
+
+<Warning>Both title and content are required. The create button will be disabled while the post is being saved.</Warning>
+
+</Steps>
+
+## Server-Side Post Creation
+
+The post creation is handled server-side with validation:
+
+```typescript
+// server/actions/post.ts
+export const CreatePostAction = async ({ 
+    title, 
+    content 
+}: { 
+    title: string, 
+    content: string 
+}) => {
+    try {
+        const { user } = await validateUser()
+        const postId = await db.insert(PostTable).values({
+            title: title!,
+            content: content!,
+            userId: user?.id!
+        }).returning({ postId: PostTable.id });
+        
+        revalidatePath("/home")
+        return postId[0].postId
+    } catch (e) {
+        throw new Error(e.message)
+    }
+}
+```
+
+Key features:
+- User authentication is validated before post creation
+- Posts are linked to your user ID automatically
+- The home feed is revalidated to show your new post
+- Returns the new post ID for navigation
+
+## Post Content Structure
+
+Posts are stored as JSON objects that preserve the document structure created by TipTap. This allows for rich content rendering including:
+
+- Formatted text with multiple heading levels
+- Inline formatting (bold, italic, strikethrough, code)
+- Embedded images with custom sizing
+- Hyperlinks with custom attributes
+- Ordered and unordered lists
+- Code blocks with syntax highlighting
+- Embedded YouTube videos
+
+## Next Steps
+
+- Learn more about [Using the Editor](/guides/using-editor) features
+- Understand how to edit or delete posts
+- Explore post visibility and sharing options

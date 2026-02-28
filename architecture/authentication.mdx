@@ -1,0 +1,324 @@
+---
+title: "Authentication Flow"
+description: "Session-based authentication implementation with Lucia in Esoteric Network"
+---
+
+## Authentication Overview
+
+Esoteric Network uses Lucia for session-based authentication, providing a lightweight and type-safe authentication system integrated with Drizzle ORM and Xata.
+
+<Note>
+Lucia is a low-level authentication library that gives you full control over session management without imposing framework-specific patterns.
+</Note>
+
+## Lucia Setup
+
+The Lucia instance is configured with a Drizzle PostgreSQL adapter:
+
+```typescript
+import { SelectUser, SessionTable, UserTable } from "@/db/schema/user";
+import { Lucia } from "lucia";
+import { DrizzlePostgreSQLAdapter } from "@lucia-auth/adapter-drizzle"
+import { db } from "@/db";
+
+const adapter = new DrizzlePostgreSQLAdapter(db, SessionTable, UserTable)
+
+export const lucia = new Lucia(
+    adapter, {
+    sessionCookie: {
+        expires: false,
+        attributes: {
+            secure: process.env.NODE_ENV === "production"
+        }
+    },
+    getUserAttributes(databaseUserAttributes) {
+        return {
+            email: databaseUserAttributes.email,
+            username: databaseUserAttributes.username,
+            userId: databaseUserAttributes.id,
+            profilePicture: databaseUserAttributes.profileUrl,
+        }
+    },
+}
+)
+```
+
+### Configuration Breakdown
+
+<Tabs>
+  <Tab title="Adapter">
+    The `DrizzlePostgreSQLAdapter` connects Lucia to the database:
+    - **db**: Drizzle database instance
+    - **SessionTable**: Drizzle schema for sessions
+    - **UserTable**: Drizzle schema for users
+  </Tab>
+  <Tab title="Session Cookie">
+    Cookie configuration for session persistence:
+    - **expires: false**: Session cookies persist until manually cleared
+    - **secure**: HTTPS-only in production, HTTP allowed in development
+  </Tab>
+  <Tab title="User Attributes">
+    Maps database columns to session user attributes:
+    - email → email
+    - username → username
+    - id → userId
+    - profileUrl → profilePicture
+  </Tab>
+</Tabs>
+
+<Warning>
+Session cookies are configured with `expires: false`, meaning they persist indefinitely until explicitly invalidated. The `expiresAt` field in the database controls actual session validity.
+</Warning>
+
+## Type Augmentation
+
+Lucia requires type augmentation to provide type-safe user attributes:
+
+```typescript
+declare module 'lucia' {
+    interface Register {
+        Lucia: typeof lucia;
+        DatabaseUserAttributes: SelectUser
+    }
+}
+```
+
+This augmentation:
+- Binds the Lucia instance type to the module
+- Maps `DatabaseUserAttributes` to the `SelectUser` type from Drizzle
+- Enables TypeScript autocomplete for `user` objects in session validation results
+
+## Session Validation
+
+The `validateUser` function handles session validation for protected routes:
+
+```typescript
+import { cookies } from "next/headers";
+import { cache } from "react";
+import { type Session, type User } from "lucia";
+import { lucia } from "./lucia";
+
+export const validateUser = cache(
+    async (): Promise<{ user: User; session: Session } | { user: null; session: null }> => {
+        const sessionId = cookies().get(lucia.sessionCookieName)?.value ?? null;
+        if (!sessionId) {
+            return {
+                user: null,
+                session: null
+            };
+        }
+
+        const result = await lucia.validateSession(sessionId);
+        // next.js throws when you attempt to set cookie when rendering page
+        try {
+            if (result.session && result.session.fresh) {
+                const sessionCookie = lucia.createSessionCookie(result.session.id);
+                cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+            }
+            if (!result.session) {
+                const sessionCookie = lucia.createBlankSessionCookie();
+                cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+            }
+        } catch { }
+        return result;
+    }
+);
+```
+
+### Validation Flow
+
+```
+1. Extract session ID from cookies
+   ↓
+2. Return null if no session cookie
+   ↓
+3. Validate session with Lucia
+   ↓
+4. Refresh cookie if session is fresh
+   ↓
+5. Clear cookie if session is invalid
+   ↓
+6. Return user and session data
+```
+
+### Key Implementation Details
+
+<Accordion title="React Cache Wrapper">
+The function is wrapped with React's `cache()` to deduplicate requests within a single render:
+
+- Multiple `validateUser()` calls in one request = single database query
+- Cache is cleared between requests automatically
+- Improves performance for layouts and nested components
+</Accordion>
+
+<Accordion title="Fresh Session Handling">
+When `result.session.fresh` is true:
+
+- The session was recently validated and the expiration was extended
+- A new session cookie is set with the updated expiration
+- Prevents session timeout for active users
+</Accordion>
+
+<Accordion title="Error Handling for Cookie Setting">
+The try-catch block around cookie setting handles Next.js limitations:
+
+- Next.js throws errors when setting cookies during page rendering
+- The catch block silently ignores these errors
+- Session validation still succeeds even if cookies can't be updated
+</Accordion>
+
+<Info>
+Session validation returns a union type: either `{ user: User; session: Session }` or `{ user: null; session: null }`, enabling type-safe null checks in components.
+</Info>
+
+## Usage in Server Components
+
+Validate users in Next.js server components:
+
+```typescript
+import { validateUser } from "@/lib/validateuser";
+import { redirect } from "next/navigation";
+
+export default async function ProtectedPage() {
+  const { user, session } = await validateUser();
+  
+  if (!user) {
+    redirect("/login");
+  }
+  
+  return (
+    <div>
+      <h1>Welcome, {user.username}</h1>
+      <p>Email: {user.email}</p>
+    </div>
+  );
+}
+```
+
+## Authentication Lifecycle
+
+### 1. User Registration
+
+```typescript
+import { lucia } from "@/lib/lucia";
+import { db } from "@/db";
+import { UserTable } from "@/db/schema/user";
+import { hash } from "@node-rs/argon2";
+
+// Hash password
+const passwordHash = await hash(password);
+
+// Create user
+const [user] = await db.insert(UserTable).values({
+  username,
+  email,
+  password: passwordHash,
+}).returning();
+
+// Create session
+const session = await lucia.createSession(user.id, {});
+const sessionCookie = lucia.createSessionCookie(session.id);
+
+// Set cookie
+cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+```
+
+### 2. User Login
+
+```typescript
+import { verify } from "@node-rs/argon2";
+import { eq } from "drizzle-orm";
+
+// Find user by email
+const [user] = await db
+  .select()
+  .from(UserTable)
+  .where(eq(UserTable.email, email))
+  .limit(1);
+
+if (!user) {
+  return { error: "Invalid credentials" };
+}
+
+// Verify password
+const validPassword = await verify(user.password, password);
+
+if (!validPassword) {
+  return { error: "Invalid credentials" };
+}
+
+// Create session
+const session = await lucia.createSession(user.id, {});
+const sessionCookie = lucia.createSessionCookie(session.id);
+cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+```
+
+### 3. User Logout
+
+```typescript
+import { lucia } from "@/lib/lucia";
+import { validateUser } from "@/lib/validateuser";
+
+const { session } = await validateUser();
+
+if (session) {
+  // Invalidate session in database
+  await lucia.invalidateSession(session.id);
+  
+  // Clear session cookie
+  const sessionCookie = lucia.createBlankSessionCookie();
+  cookies().set(sessionCookie.name, sessionCookie.value, sessionCookie.attributes);
+}
+```
+
+## Security Considerations
+
+<Warning>
+**Password Hashing**: Always use a secure hashing algorithm like Argon2. Never store plaintext passwords.
+</Warning>
+
+<Warning>
+**HTTPS in Production**: The `secure` cookie attribute is automatically enabled in production to prevent session hijacking over HTTP.
+</Warning>
+
+### Session Security
+
+- **Expiration**: Sessions expire based on the `expiresAt` field in the database
+- **Fresh Sessions**: Lucia automatically extends active sessions to prevent timeout
+- **Invalid Sessions**: Expired or invalid sessions are automatically cleared
+- **Cookie Security**: Secure flag enforced in production, httpOnly by default
+
+## Database Schema Integration
+
+Lucia expects specific columns in the session and user tables:
+
+### Required Session Columns
+- `id` (text): Session identifier
+- `user_id` (text): Foreign key to user table
+- `expires_at` (timestamp): Session expiration
+
+### Required User Columns
+- `id` (text): User identifier
+
+See [Database Schema](/architecture/database) for the complete schema definitions.
+
+## Type Safety
+
+The authentication system is fully type-safe:
+
+```typescript
+const { user, session } = await validateUser();
+
+if (user) {
+  // TypeScript knows user is not null
+  console.log(user.email);      // ✓ Type-safe
+  console.log(user.username);   // ✓ Type-safe
+  console.log(user.userId);     // ✓ Type-safe
+  console.log(user.profilePicture); // ✓ Type-safe
+} else {
+  // TypeScript knows user is null
+  redirect("/login");
+}
+```
+
+Type augmentation ensures that `user` objects have properly typed attributes based on the `getUserAttributes` configuration.

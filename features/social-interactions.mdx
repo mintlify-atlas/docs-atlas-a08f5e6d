@@ -1,0 +1,280 @@
+---
+title: Social Interactions
+description: Likes and engagement features for community building
+icon: heart
+---
+
+## Overview
+
+Esoteric Network enables users to engage with content through a like system. Users can like posts to show appreciation, and likes are displayed as engagement metrics on each post.
+
+## Like System
+
+The like system uses a toggle mechanism where users can like or unlike posts. Likes are stored in the database with a boolean `isLiked` flag:
+
+```typescript
+export const LikeTable = pgTable("like", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    postId: text("post_id").notNull().references(() => PostTable.id),
+    userId: text("user_id").notNull().references(() => UserTable.id),
+    isLiked: boolean("is_liked").notNull().default(true),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+<Info>
+  Likes use a soft-delete pattern with the `isLiked` boolean instead of removing rows. This preserves engagement history.
+</Info>
+
+## Like Toggle Action
+
+The `ModifyLikeAction` handles creating new likes, toggling existing likes on, and toggling them off:
+
+```typescript
+export const ModifyLikeAction = async ({ postId }: { postId: string }) => {
+    const { user } = await validateUser()
+    const alreadyLiked =
+        await db.select({ isLiked: LikeTable.isLiked })
+            .from(LikeTable)
+            .where(eq(LikeTable.postId, postId))
+    
+    // First time liking - create new like record
+    if (alreadyLiked[0] === undefined) {
+        await db.insert(LikeTable).values({
+            postId: postId,
+            userId: user?.id!,
+            isLiked: true,
+            createdAt: new Date()
+        })
+        revalidatePath("/post/" + postId)
+        return
+    }
+    
+    // Unlike - set isLiked to false
+    if (alreadyLiked[0].isLiked) {
+        await db.update(LikeTable).set({
+            isLiked: false,
+            updatedAt: new Date()
+        }).where(and(eq(LikeTable.postId, postId), eq(LikeTable.userId, user?.id!)))
+        revalidatePath("/post/" + postId)
+        return
+    }
+    
+    // Re-like - set isLiked back to true
+    if (alreadyLiked[0].isLiked === false) {
+        await db.update(LikeTable).set({
+            isLiked: true,
+            updatedAt: new Date()
+        }).where(and(eq(LikeTable.postId, postId), eq(LikeTable.userId, user?.id!)))
+        revalidatePath("/post/" + postId)
+        return
+    }
+}
+```
+
+### Like Flow States
+
+<AccordionGroup>
+  <Accordion title="First Like">
+    When a user likes a post for the first time:
+    - A new record is created in the `LikeTable`
+    - `isLiked` is set to `true`
+    - `createdAt` timestamp is recorded
+    - Post page is revalidated to show the updated count
+  </Accordion>
+
+  <Accordion title="Unlike">
+    When a user unlikes a post:
+    - The existing like record is updated
+    - `isLiked` is set to `false`
+    - `updatedAt` timestamp is recorded
+    - The record is preserved for analytics
+  </Accordion>
+
+  <Accordion title="Re-like">
+    When a user likes a previously unliked post:
+    - The existing record is updated again
+    - `isLiked` is set back to `true`
+    - `updatedAt` timestamp is recorded
+    - Like count increases again
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Each user can only have one like record per post. The system uses a combination of `postId` and `userId` to enforce this.
+</Note>
+
+## Displaying Like Counts
+
+Like counts are calculated by querying the database for active likes (where `isLiked` is true):
+
+```typescript
+const likeCount = await db.select({ count: count() })
+    .from(LikeTable)
+    .where(and(eq(LikeTable.postId, postId), eq(LikeTable.isLiked, true)))
+```
+
+This query:
+- Filters likes by the specific post ID
+- Only counts likes where `isLiked` is `true`
+- Returns the total count as an aggregate
+
+### Visual Presentation
+
+Like counts are displayed with a trending icon to make engagement visible:
+
+```tsx
+<p className="leading-7 flex gap-4">
+    <TrendingUp className="text-green-500" /> {likeCount[0].count}
+</p>
+```
+
+<Tip>
+  The green trending-up icon creates positive visual feedback and encourages more engagement.
+</Tip>
+
+## User Interaction Flow
+
+### Liking a Post
+
+<Steps>
+  <Step title="Find a Post">
+    Browse the home feed or visit a user profile to discover posts.
+  </Step>
+  <Step title="Click Like Button">
+    Click the heart or like button on a post you enjoy.
+  </Step>
+  <Step title="See Instant Feedback">
+    The like button changes state and the like count increases immediately.
+  </Step>
+</Steps>
+
+### Unliking a Post
+
+<Steps>
+  <Step title="Navigate to Liked Post">
+    Return to a post you previously liked (it will show as liked).
+  </Step>
+  <Step title="Click Unlike">
+    Click the active like button to remove your like.
+  </Step>
+  <Step title="Count Updates">
+    The like count decreases and the button returns to the unliked state.
+  </Step>
+</Steps>
+
+## Like Button States
+
+The like button has two visual states based on whether the current user has liked the post:
+
+<Tabs>
+  <Tab title="Unliked State">
+    - Outline heart icon
+    - Default color (gray or theme color)
+    - Hover effect shows it's clickable
+    - Tooltip: "Like this post"
+  </Tab>
+  <Tab title="Liked State">
+    - Filled heart icon
+    - Accent color (red or pink)
+    - Hover effect indicates it can be unliked
+    - Tooltip: "Unlike this post"
+  </Tab>
+</Tabs>
+
+## Engagement Metrics
+
+Like counts serve multiple purposes in the app:
+
+### Post Popularity
+
+Posts with more likes are considered more popular. The system can use like counts to:
+- Sort posts by engagement
+- Highlight trending content
+- Recommend posts to new users
+
+### User Engagement
+
+Like data provides insights into:
+- Which users are most active
+- What content resonates with the community
+- Engagement patterns over time
+
+<Info>
+  Because likes use soft-deletes, the system can analyze not just current likes but also historical engagement patterns.
+</Info>
+
+## Integration with Post Deletion
+
+When a post is deleted, all associated likes are also removed to maintain database integrity:
+
+```typescript
+export const DeletePostAction = async ({ postId }: { postId: string }) => {
+    // ... ownership verification ...
+    
+    // Delete associated likes first
+    await db.delete(LikeTable).where(eq(LikeTable.postId, postId));
+    await db.delete(PostTable).where(eq(PostTable.id, postId))
+    
+    revalidatePath("/profile/" + user?.id)
+    revalidatePath("/home")
+}
+```
+
+<Warning>
+  When a post is deleted, all likes on that post are permanently removed. This cannot be undone.
+</Warning>
+
+## Performance Considerations
+
+### Efficient Counting
+
+Like counts are calculated using database aggregations rather than fetching all like records:
+
+```typescript
+// Efficient: count in database
+const likeCount = await db.select({ count: count() })
+    .from(LikeTable)
+    .where(and(eq(LikeTable.postId, postId), eq(LikeTable.isLiked, true)))
+
+// Inefficient: fetch all and count in JavaScript
+// const allLikes = await db.select().from(LikeTable)...
+// const count = allLikes.length
+```
+
+### Path Revalidation
+
+After each like action, only the specific post page is revalidated:
+
+```typescript
+revalidatePath("/post/" + postId)
+```
+
+This ensures:
+- Updated like counts appear immediately
+- Other pages aren't unnecessarily revalidated
+- Server load is minimized
+
+<Tip>
+  Targeted revalidation keeps the app fast while ensuring data freshness where it matters.
+</Tip>
+
+## Future Engagement Features
+
+The like system provides a foundation for additional engagement features:
+
+- **Comments**: Thread-based discussions on posts
+- **Shares**: Reposting content to your own feed
+- **Bookmarks**: Save posts for later reading
+- **Reactions**: Emoji-based responses beyond simple likes
+
+<Note>
+  The current schema can be extended to support these features without major migrations.
+</Note>

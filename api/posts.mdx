@@ -1,0 +1,203 @@
+---
+title: 'Post Actions'
+description: 'Server actions for creating, editing, and deleting posts'
+---
+
+## CreatePostAction
+
+Creates a new post in the database with the specified title and content.
+
+```typescript
+const postId = await CreatePostAction({ 
+  title: "My First Post", 
+  content: "This is the content of my post" 
+});
+```
+
+### Parameters
+
+<ParamField path="title" type="string" required>
+  The title of the post
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  The main content body of the post
+</ParamField>
+
+### Returns
+
+<ResponseField name="postId" type="string">
+  The unique identifier of the newly created post
+</ResponseField>
+
+### Behavior
+
+- Validates the current user session before creating the post
+- Associates the post with the authenticated user's ID
+- Revalidates the `/home` path to reflect the new post
+- Returns the generated post ID from the database
+
+### Error Handling
+
+```typescript
+try {
+  const postId = await CreatePostAction({ title, content });
+  console.log("Post created:", postId);
+} catch (error) {
+  console.error("Failed to create post:", error.message);
+}
+```
+
+<Expandable title="Common Errors">
+  - Authentication failure if user is not logged in
+  - Database insertion errors
+  - Missing or invalid title/content parameters
+</Expandable>
+
+---
+
+## EditPostAction
+
+Updates an existing post's title and content.
+
+```typescript
+await EditPostAction({ 
+  postId: "post-123",
+  title: "Updated Title", 
+  content: "Updated content" 
+});
+```
+
+### Parameters
+
+<ParamField path="postId" type="string" required>
+  The unique identifier of the post to edit
+</ParamField>
+
+<ParamField path="title" type="string" required>
+  The new title for the post
+</ParamField>
+
+<ParamField path="content" type="string" required>
+  The new content for the post
+</ParamField>
+
+### Returns
+
+This action does not return a value (`void`).
+
+### Behavior
+
+- Validates that both title and content are provided
+- Validates the current user session
+- Updates the post with the new title and content
+- Sets the `updatedAt` timestamp to the current date
+- Revalidates the `/post/{postId}` path to show updated content
+
+<Warning>
+  This action does not verify post ownership. Ensure authorization checks are performed at a higher level if needed.
+</Warning>
+
+### Error Handling
+
+```typescript
+try {
+  await EditPostAction({ postId, title, content });
+} catch (error) {
+  if (error.message === "Title and content are required") {
+    // Handle missing parameters
+  }
+}
+```
+
+<Expandable title="Validation Errors">
+  - `"Title and content are required"` - Thrown when title or content is undefined
+  - Authentication errors if user session is invalid
+</Expandable>
+
+---
+
+## DeletePostAction
+
+Deletes a post and all associated likes from the database.
+
+```typescript
+await DeletePostAction({ postId: "post-123" });
+```
+
+### Parameters
+
+<ParamField path="postId" type="string" required>
+  The unique identifier of the post to delete
+</ParamField>
+
+### Returns
+
+This action does not return a value (`void`).
+
+### Behavior
+
+- Validates the current user session
+- Verifies that the authenticated user owns the post
+- Deletes all likes associated with the post
+- Deletes the post itself
+- Revalidates `/profile/{userId}` and `/home` paths
+
+<Note>
+  This is a cascading delete operation. All likes on the post are removed before the post is deleted to maintain referential integrity.
+</Note>
+
+### Authorization
+
+The action performs ownership verification:
+
+```typescript
+if (post[0].userId !== user?.id) {
+  throw new Error("You are not authorized to delete this post");
+}
+```
+
+Only the post author can delete their own posts.
+
+### Error Handling
+
+```typescript
+try {
+  await DeletePostAction({ postId });
+} catch (error) {
+  if (error.message === "You are not authorized to delete this post") {
+    // Handle authorization error
+  } else if (error.message === "Post not found") {
+    // Handle missing post
+  }
+}
+```
+
+<Expandable title="Authorization Errors">
+  - `"You are not authorized to delete this post"` - User is not the post owner
+  - `"Post not found"` - Post ID does not exist in database
+  - Authentication errors if user session is invalid
+</Expandable>
+
+---
+
+## Implementation Details
+
+### Source Location
+
+`~/workspace/source/server/actions/post.ts`
+
+### Dependencies
+
+- **Drizzle ORM**: Database operations
+- **Next.js**: `revalidatePath` for cache invalidation
+- **validateUser**: User authentication validation
+
+### Database Tables
+
+- `PostTable`: Stores post data (id, title, content, userId, updatedAt)
+- `LikeTable`: Stores like relationships (deleted during post deletion)
+
+<Note>
+  All actions use `"use server"` directive and run on the server side. They automatically validate user sessions before performing operations.
+</Note>

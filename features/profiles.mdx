@@ -1,0 +1,256 @@
+---
+title: User Profiles
+description: Customizable user profiles with avatars and bios
+icon: user
+---
+
+## Overview
+
+Every user on Esoteric Network has a profile page displaying their username, avatar, bio, and post history. Users can customize their profiles by updating their display name, uploading profile pictures, and writing a bio.
+
+## Profile Structure
+
+User profiles are stored in the database with the following structure:
+
+```typescript
+export const UserTable = pgTable("user", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    username: text("username").notNull(),
+    email: text("email").notNull(),
+    password: text("password").notNull(),
+    bio: text("bio"),
+    profileUrl: text("profile_url"),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+<Info>
+  Bios and profile pictures are optional fields. New users start with null values for these fields.
+</Info>
+
+## Editing Profiles
+
+Users can update their username and bio through the Edit Profile dialog. The interface adapts responsively for desktop and mobile:
+
+```typescript
+export const UpdateUserAction = async ({ username, bio }: { username: string, bio: string }) => {
+    const { user } = await validateUser()
+    const userAlreadyExists = await db.select().from(UserTable)
+        .where(eq(UserTable.username, username))
+    if (userAlreadyExists.length > 0) {
+        throw new Error("Username already exists");
+    }
+    await db.update(UserTable).set({ bio, username })
+        .where(eq(UserTable.id, user?.id))
+    revalidatePath(`/profile/${user?.id}`)
+}
+```
+
+<Warning>
+  Usernames must be unique across the platform. The system checks for duplicates before updating.
+</Warning>
+
+### Bio Requirements
+
+Bios are validated with a Zod schema to ensure appropriate length:
+
+```typescript
+const formSchema = z.object({
+    username: z.string().min(2).max(50),
+    bio: z.string().min(2).max(140),
+})
+```
+
+<Note>
+  Bios are limited to 140 characters, similar to early Twitter. This encourages concise, meaningful descriptions.
+</Note>
+
+## Profile Pictures
+
+Users can upload and update their profile avatars. The image URL is stored in the `profileUrl` field:
+
+```typescript
+export const UpdateUserImageAction = async ({ image }: { image: string }) => {
+    const { user } = await validateUser()
+    await db.update(UserTable).set({ profileUrl: image })
+        .where(eq(UserTable.id, user?.id))
+    revalidatePath(`/profile/${user?.id}`)
+}
+```
+
+### Avatar Upload Flow
+
+<Steps>
+  <Step title="Open Edit Profile">
+    Click the "Edit Profile" button on your profile page.
+  </Step>
+  <Step title="Upload Image">
+    Click on your current avatar or the upload area to select a new image from your device.
+  </Step>
+  <Step title="Save Changes">
+    The image is uploaded and the profile is revalidated to show your new avatar immediately.
+  </Step>
+</Steps>
+
+<Tip>
+  Profile pictures are displayed throughout the app, including next to your posts and in comment threads.
+</Tip>
+
+## Edit Profile Component
+
+The edit profile interface provides a form with validation and responsive design:
+
+```typescript
+export const EditProfile = ({ user }: EditProfileProps) => {
+    const form = useForm<z.infer<typeof formSchema>>({
+        resolver: zodResolver(formSchema),
+        defaultValues: {
+            username: user.username,
+            bio: user.bio ?? "",
+        },
+    })
+    
+    const { mutateAsync: updateUser, isPending: updateUserPending } = useMutation({
+        mutationFn: async (values: z.infer<typeof formSchema>) => {
+            await UpdateUserAction({ username: values.username, bio: values.bio })
+        },
+        onError: (error) => {
+            toast({
+                title: "Error",
+                description: error.message,
+                variant: "destructive",
+            })
+        },
+        onSuccess: () => {
+            toast({
+                title: "Success",
+                description: "User updated successfully",
+                variant: "default",
+            })
+        },
+    })
+    
+    async function onSubmit(values: z.infer<typeof formSchema>) {
+        await updateUser(values)
+        setOpen(false)
+    }
+}
+```
+
+### Form Features
+
+<AccordionGroup>
+  <Accordion title="Real-time Validation">
+    The form uses React Hook Form with Zod validation to provide instant feedback on:
+    - Username length (2-50 characters)
+    - Bio length (2-140 characters)
+    - Required fields
+  </Accordion>
+
+  <Accordion title="Responsive Design">
+    The component renders as a dialog on desktop and a drawer on mobile devices, determined by the `useMediaQuery` hook checking for screens 768px and wider.
+  </Accordion>
+
+  <Accordion title="Loading States">
+    While the update is processing, the submit button shows a loading spinner and is disabled to prevent duplicate submissions.
+  </Accordion>
+
+  <Accordion title="Toast Notifications">
+    Success and error messages are displayed using toast notifications:
+    - Green toast for successful updates
+    - Red destructive toast for errors like duplicate usernames
+  </Accordion>
+</AccordionGroup>
+
+## Profile URLs
+
+User profiles are accessible at `/profile/{userId}` where `userId` is the unique CUID2 identifier. This ensures profiles remain accessible even if usernames change.
+
+<Info>
+  Using user IDs in URLs instead of usernames means profile links never break when users update their display names.
+</Info>
+
+## Viewing Profiles
+
+When viewing a profile, users see:
+
+- **Username**: The user's chosen display name
+- **Profile Picture**: Their uploaded avatar or a default image
+- **Bio**: Their personal description (if set)
+- **Post History**: All posts created by the user, sorted by date
+- **Join Date**: When the account was created
+
+### Your Own Profile
+
+When viewing your own profile, additional controls appear:
+
+- **Edit Profile** button to update username and bio
+- **Edit** buttons on your posts
+- **Delete** buttons on your posts
+
+### Other Users' Profiles
+
+When viewing someone else's profile:
+
+- No edit controls are shown
+- Posts are read-only
+- You can like and engage with their posts
+
+<Tabs>
+  <Tab title="Own Profile">
+    ```typescript
+    // Profile owner sees edit controls
+    {user?.id === currentUser?.id && (
+        <EditProfile user={user} />
+    )}
+    ```
+  </Tab>
+  <Tab title="Other Profile">
+    ```typescript
+    // Other users see read-only view
+    <div className="profile-view">
+        <Avatar src={user.profileUrl} />
+        <h1>{user.username}</h1>
+        <p>{user.bio}</p>
+    </div>
+    ```
+  </Tab>
+</Tabs>
+
+## Profile Customization Workflow
+
+### Updating Your Username
+
+1. Navigate to your profile by clicking your avatar in the header
+2. Click "Edit Profile"
+3. Enter your new username in the username field
+4. Ensure it's between 2-50 characters
+5. Click "Save changes"
+6. Your new username appears throughout the app immediately
+
+### Writing Your Bio
+
+1. Open the Edit Profile dialog
+2. Click in the bio field
+3. Write a description of yourself (up to 140 characters)
+4. Use the character counter to track your remaining space
+5. Save to publish your bio on your profile
+
+### Changing Your Avatar
+
+1. Click "Edit Profile"
+2. Click on your current profile picture
+3. Select a new image from your device
+4. The image uploads and displays instantly
+5. Close the dialog to return to your updated profile
+
+<Warning>
+  Make sure your profile picture meets the platform's content guidelines. Inappropriate images may be removed by moderators.
+</Warning>

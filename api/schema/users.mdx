@@ -1,0 +1,147 @@
+---
+title: 'User & Session Tables'
+description: 'User authentication and session management schema definitions'
+---
+
+## UserTable
+
+The `UserTable` stores user account information and profile data. This table uses Drizzle ORM with PostgreSQL and automatically generates CUID2 identifiers for primary keys.
+
+### Schema Definition
+
+```typescript
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { createId } from "@paralleldrive/cuid2";
+
+export const UserTable = pgTable("user", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    username: text("username").notNull(),
+    email: text("email").notNull(),
+    password: text("password").notNull(),
+    bio: text("bio"),
+    profileUrl: text("profile_url"),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+### Fields
+
+<ParamField path="id" type="text" required>
+  Primary key generated using CUID2. Automatically created on insert.
+</ParamField>
+
+<ParamField path="username" type="text" required>
+  Unique username for the user account.
+</ParamField>
+
+<ParamField path="email" type="text" required>
+  User's email address for authentication and communication.
+</ParamField>
+
+<ParamField path="password" type="text" required>
+  Hashed password for user authentication. Should never be stored in plaintext.
+</ParamField>
+
+<ParamField path="bio" type="text">
+  Optional user biography or description.
+</ParamField>
+
+<ParamField path="profileUrl" type="text">
+  Optional URL to user's profile picture or avatar.
+</ParamField>
+
+<ParamField path="createdAt" type="timestamp">
+  Timestamp with timezone indicating when the user account was created. Defaults to current time.
+</ParamField>
+
+<ParamField path="updatedAt" type="timestamp">
+  Timestamp with timezone indicating when the user account was last updated. Defaults to current time.
+</ParamField>
+
+### Type Inference
+
+```typescript
+export type InsertUser = typeof UserTable.$inferInsert
+export type SelectUser = typeof UserTable.$inferSelect
+```
+
+<Expandable title="Type Usage Examples">
+
+```typescript
+// Inserting a new user
+const newUser: InsertUser = {
+  username: "alice",
+  email: "alice@example.com",
+  password: "hashed_password_here",
+  bio: "Software developer"
+};
+
+// Selecting a user
+const user: SelectUser = await db
+  .select()
+  .from(UserTable)
+  .where(eq(UserTable.id, userId));
+```
+
+</Expandable>
+
+### Relationships
+
+<Note>
+  The UserTable has one-to-many relationships with:
+  - **SessionTable**: One user can have multiple active sessions
+  - **PostTable**: One user can create multiple posts
+  - **LikeTable**: One user can like multiple posts
+</Note>
+
+---
+
+## SessionTable
+
+The `SessionTable` manages user authentication sessions, storing session tokens and expiration times.
+
+### Schema Definition
+
+```typescript
+export const SessionTable = pgTable("session", {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+        .notNull()
+        .references(() => UserTable.id),
+    expiresAt: timestamp("expires_at", {
+        withTimezone: true,
+        mode: "date"
+    }).notNull()
+});
+```
+
+### Fields
+
+<ParamField path="id" type="text" required>
+  Primary key representing the unique session identifier/token.
+</ParamField>
+
+<ParamField path="userId" type="text" required>
+  Foreign key reference to the UserTable. Links the session to a specific user account.
+</ParamField>
+
+<ParamField path="expiresAt" type="timestamp" required>
+  Timestamp with timezone indicating when the session expires. Used to invalidate old sessions.
+</ParamField>
+
+### Foreign Key Constraints
+
+<ResponseField name="userId" type="foreign key">
+  References `UserTable.id` with cascade behavior. When a user is deleted, their sessions are also removed.
+</ResponseField>
+
+<Note>
+  Sessions should be validated against the `expiresAt` timestamp on each request. Expired sessions should be removed from the database.
+</Note>

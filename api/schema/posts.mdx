@@ -1,0 +1,213 @@
+---
+title: 'Post & Like Tables'
+description: 'Content creation and engagement schema definitions'
+---
+
+## PostTable
+
+The `PostTable` stores user-generated content including titles and post bodies. Posts are linked to users through a foreign key relationship.
+
+### Schema Definition
+
+```typescript
+import { createId } from "@paralleldrive/cuid2";
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { UserTable } from "./user";
+
+export const PostTable = pgTable("post", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    userId: text("user_id").notNull().references(() => UserTable.id)
+});
+```
+
+### Fields
+
+<ParamField path="id" type="text" required>
+  Primary key generated using CUID2. Automatically created on insert.
+</ParamField>
+
+<ParamField path="title" type="text" required>
+  The title of the post. Must not be empty.
+</ParamField>
+
+<ParamField path="content" type="text" required>
+  The main content body of the post. Must not be empty.
+</ParamField>
+
+<ParamField path="createdAt" type="timestamp">
+  Timestamp with timezone indicating when the post was created. Defaults to current time.
+</ParamField>
+
+<ParamField path="updatedAt" type="timestamp">
+  Timestamp with timezone indicating when the post was last modified. Defaults to current time.
+</ParamField>
+
+<ParamField path="userId" type="text" required>
+  Foreign key reference to the UserTable. Identifies the author of the post.
+</ParamField>
+
+### Relationships
+
+<ResponseField name="userId" type="foreign key">
+  References `UserTable.id`. Each post belongs to exactly one user (the author).
+</ResponseField>
+
+<Note>
+  The PostTable has a one-to-many relationship with the LikeTable. One post can receive multiple likes from different users.
+</Note>
+
+### Usage Example
+
+<Expandable title="Creating and Querying Posts">
+
+```typescript
+import { db } from "./db";
+import { PostTable } from "./schema/post";
+import { eq } from "drizzle-orm";
+
+// Create a new post
+const newPost = await db.insert(PostTable).values({
+  title: "Introduction to Drizzle ORM",
+  content: "Drizzle is a lightweight TypeScript ORM...",
+  userId: "user_123"
+});
+
+// Query posts by user
+const userPosts = await db
+  .select()
+  .from(PostTable)
+  .where(eq(PostTable.userId, "user_123"));
+
+// Update a post
+await db
+  .update(PostTable)
+  .set({ 
+    title: "Updated Title",
+    updatedAt: new Date()
+  })
+  .where(eq(PostTable.id, "post_456"));
+```
+
+</Expandable>
+
+---
+
+## LikeTable
+
+The `LikeTable` tracks user engagement with posts through a like/unlike mechanism. It creates a many-to-many relationship between users and posts.
+
+### Schema Definition
+
+```typescript
+import { boolean, pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { createId } from "@paralleldrive/cuid2";
+
+export const LikeTable = pgTable("like", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    postId: text("post_id").notNull().references(() => PostTable.id),
+    userId: text("user_id").notNull().references(() => UserTable.id),
+    isLiked: boolean("is_liked").notNull().default(true),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+### Fields
+
+<ParamField path="id" type="text" required>
+  Primary key generated using CUID2. Automatically created on insert.
+</ParamField>
+
+<ParamField path="postId" type="text" required>
+  Foreign key reference to the PostTable. Identifies which post is being liked.
+</ParamField>
+
+<ParamField path="userId" type="text" required>
+  Foreign key reference to the UserTable. Identifies which user performed the like action.
+</ParamField>
+
+<ParamField path="isLiked" type="boolean" required>
+  Indicates the current like state. Defaults to `true`. Can be toggled to `false` for unlike without deleting the record.
+</ParamField>
+
+<ParamField path="createdAt" type="timestamp">
+  Timestamp with timezone indicating when the like record was first created. Defaults to current time.
+</ParamField>
+
+<ParamField path="updatedAt" type="timestamp">
+  Timestamp with timezone indicating when the like state was last changed. Defaults to current time.
+</ParamField>
+
+### Foreign Key Constraints
+
+<ResponseField name="postId" type="foreign key">
+  References `PostTable.id`. Links the like to a specific post.
+</ResponseField>
+
+<ResponseField name="userId" type="foreign key">
+  References `UserTable.id`. Links the like to a specific user.
+</ResponseField>
+
+<Note>
+  The `isLiked` boolean allows for soft toggles between liked/unliked states without deleting records. This preserves engagement history and analytics data.
+</Note>
+
+### Usage Example
+
+<Expandable title="Managing Likes">
+
+```typescript
+import { db } from "./db";
+import { LikeTable } from "./schema/post";
+import { and, eq } from "drizzle-orm";
+
+// Add a like
+const newLike = await db.insert(LikeTable).values({
+  postId: "post_789",
+  userId: "user_123",
+  isLiked: true
+});
+
+// Toggle like state (unlike)
+await db
+  .update(LikeTable)
+  .set({ 
+    isLiked: false,
+    updatedAt: new Date()
+  })
+  .where(
+    and(
+      eq(LikeTable.postId, "post_789"),
+      eq(LikeTable.userId, "user_123")
+    )
+  );
+
+// Count likes for a post
+const likesCount = await db
+  .select({ count: count() })
+  .from(LikeTable)
+  .where(
+    and(
+      eq(LikeTable.postId, "post_789"),
+      eq(LikeTable.isLiked, true)
+    )
+  );
+```
+
+</Expandable>

@@ -1,0 +1,185 @@
+---
+title: 'Like Actions'
+description: 'Server action for toggling likes on posts'
+---
+
+## ModifyLikeAction
+
+Toggles the like status for a post. This action handles creating new likes, unliking posts, and re-liking previously unliked posts.
+
+```typescript
+await ModifyLikeAction({ postId: "post-123" });
+```
+
+### Parameters
+
+<ParamField path="postId" type="string" required>
+  The unique identifier of the post to like or unlike
+</ParamField>
+
+### Returns
+
+This action does not return a value (`void`).
+
+### Behavior
+
+The action intelligently handles three scenarios:
+
+**1. First-time like (no existing record)**
+- Creates a new like record in the database
+- Sets `isLiked` to `true`
+- Associates the like with the current user and post
+- Sets `createdAt` timestamp
+
+**2. Unlike (currently liked)**
+- Updates the existing like record
+- Sets `isLiked` to `false`
+- Updates `updatedAt` timestamp
+
+**3. Re-like (previously unliked)**
+- Updates the existing like record
+- Sets `isLiked` to `true`
+- Updates `updatedAt` timestamp
+
+<Note>
+  This action uses a soft delete pattern. Like records are never deleted, only toggled between `isLiked: true` and `isLiked: false`.
+</Note>
+
+### Implementation Flow
+
+```typescript
+// Check if user has interacted with this post before
+const alreadyLiked = await db
+  .select({ isLiked: LikeTable.isLiked })
+  .from(LikeTable)
+  .where(eq(LikeTable.postId, postId));
+
+if (alreadyLiked[0] === undefined) {
+  // Scenario 1: Create new like
+  await db.insert(LikeTable).values({
+    postId: postId,
+    userId: user?.id!,
+    isLiked: true,
+    createdAt: new Date()
+  });
+} else if (alreadyLiked[0].isLiked) {
+  // Scenario 2: Unlike
+  await db.update(LikeTable).set({
+    isLiked: false,
+    updatedAt: new Date()
+  }).where(and(
+    eq(LikeTable.postId, postId),
+    eq(LikeTable.userId, user?.id!)
+  ));
+} else {
+  // Scenario 3: Re-like
+  await db.update(LikeTable).set({
+    isLiked: true,
+    updatedAt: new Date()
+  }).where(and(
+    eq(LikeTable.postId, postId),
+    eq(LikeTable.userId, user?.id!)
+  ));
+}
+```
+
+### Cache Revalidation
+
+After any like modification, the action revalidates the post page:
+
+```typescript
+revalidatePath("/post/" + postId);
+```
+
+This ensures the UI immediately reflects the updated like status.
+
+### Error Handling
+
+```typescript
+try {
+  await ModifyLikeAction({ postId });
+} catch (error) {
+  console.error("Failed to modify like:", error.message);
+}
+```
+
+<Expandable title="Common Errors">
+  - Authentication errors if user session is invalid
+  - Database operation errors
+  - Invalid postId (non-existent post)
+</Expandable>
+
+### User Experience
+
+This action is designed for toggle buttons in the UI:
+
+```typescript jsx
+// Example React component usage
+const handleLikeClick = async () => {
+  try {
+    await ModifyLikeAction({ postId });
+    // UI automatically updates via revalidatePath
+  } catch (error) {
+    toast.error("Failed to update like");
+  }
+};
+
+return (
+  <button onClick={handleLikeClick}>
+    {isLiked ? "Unlike" : "Like"}
+  </button>
+);
+```
+
+<Warning>
+  Each user can only have one like record per post. The action uses compound where clauses to ensure user-post uniqueness when updating.
+</Warning>
+
+---
+
+## Implementation Details
+
+### Source Location
+
+`~/workspace/source/server/actions/post.ts:61-95`
+
+### Database Schema
+
+The `LikeTable` contains the following relevant fields:
+
+<ResponseField name="postId" type="string">
+  Foreign key reference to the post being liked
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  Foreign key reference to the user performing the like
+</ResponseField>
+
+<ResponseField name="isLiked" type="boolean">
+  Current like status (true = liked, false = unliked)
+</ResponseField>
+
+<ResponseField name="createdAt" type="Date">
+  Timestamp when the like was first created
+</ResponseField>
+
+<ResponseField name="updatedAt" type="Date">
+  Timestamp of the last like/unlike toggle
+</ResponseField>
+
+### Authentication
+
+- Uses `validateUser()` to ensure the user is authenticated
+- Associates likes with the current user's ID from the session
+- Prevents unauthenticated like operations
+
+### Related Actions
+
+Likes are automatically handled during post deletion:
+
+- When `DeletePostAction` is called, all associated likes are removed
+- This maintains referential integrity in the database
+
+<Note>
+  The like action uses `"use server"` directive and runs exclusively on the server. All user validation and database operations are secure and cannot be bypassed by clients.
+</Note>

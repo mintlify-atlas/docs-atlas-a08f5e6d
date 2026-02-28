@@ -1,0 +1,266 @@
+---
+title: "Database Schema"
+description: "Database schema design and Drizzle ORM setup for Esoteric Network"
+---
+
+## Schema Overview
+
+The database schema is defined using Drizzle ORM with PostgreSQL-specific types, organized into modular schema files for maintainability.
+
+### Schema Structure
+
+```
+db/
+└── schema/
+    ├── user.ts    # User and session tables
+    └── post.ts    # Post and like tables
+```
+
+## User Schema
+
+The user schema defines authentication and profile data stored in the `user` table.
+
+```typescript
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { createId } from "@paralleldrive/cuid2";
+
+export const UserTable = pgTable("user", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    username: text("username").notNull(),
+    email: text("email").notNull(),
+    password: text("password").notNull(),
+    bio: text("bio"),
+    profileUrl: text("profile_url"),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+### User Table Fields
+
+<Tabs>
+  <Tab title="Required Fields">
+    - **id**: Text primary key, auto-generated using CUID2
+    - **username**: User's display name
+    - **email**: User's email address
+    - **password**: Hashed password string
+  </Tab>
+  <Tab title="Optional Fields">
+    - **bio**: User biography/description
+    - **profileUrl**: URL to user's profile image
+  </Tab>
+  <Tab title="Timestamps">
+    - **createdAt**: Account creation timestamp (timezone-aware)
+    - **updatedAt**: Last modification timestamp (timezone-aware)
+  </Tab>
+</Tabs>
+
+<Note>
+Timestamps are configured with `withTimezone: true` and `mode: "date"` to ensure proper timezone handling and JavaScript Date object compatibility.
+</Note>
+
+### Type Inference
+
+Drizzle automatically infers TypeScript types from schema definitions:
+
+```typescript
+export type InsertUser = typeof UserTable.$inferInsert
+export type SelectUser = typeof UserTable.$inferSelect
+```
+
+- **InsertUser**: Type for inserting new users (optional fields are optional in the type)
+- **SelectUser**: Type for selected user records (all fields match database schema)
+
+## Session Schema
+
+Session management is handled through the `session` table, integrated with Lucia authentication:
+
+```typescript
+export const SessionTable = pgTable("session", {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+        .notNull()
+        .references(() => UserTable.id),
+    expiresAt: timestamp("expires_at", {
+        withTimezone: true,
+        mode: "date"
+    }).notNull()
+});
+```
+
+### Session Fields
+
+- **id**: Session identifier (managed by Lucia)
+- **userId**: Foreign key reference to `UserTable.id`
+- **expiresAt**: Session expiration timestamp
+
+<Warning>
+The session table is tightly coupled with Lucia's session management. Do not modify this schema without updating the Lucia adapter configuration.
+</Warning>
+
+## Post Schema
+
+The post schema defines user-generated content:
+
+```typescript
+import { createId } from "@paralleldrive/cuid2";
+import { pgTable, text, timestamp } from "drizzle-orm/pg-core";
+import { UserTable } from "./user";
+
+export const PostTable = pgTable("post", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    title: text("title").notNull(),
+    content: text("content").notNull(),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    userId: text("user_id").notNull().references(() => UserTable.id)
+});
+```
+
+### Post Fields
+
+- **id**: Auto-generated CUID2 primary key
+- **title**: Post title
+- **content**: Post body content
+- **userId**: Foreign key to the post author
+- **createdAt/updatedAt**: Timezone-aware timestamps
+
+## Like Schema
+
+The like system uses a dedicated table to track user interactions:
+
+```typescript
+export const LikeTable = pgTable("like", {
+    id: text("id").notNull().primaryKey().$defaultFn(() => createId()),
+    postId: text("post_id").notNull().references(() => PostTable.id),
+    userId: text("user_id").notNull().references(() => UserTable.id),
+    isLiked: boolean("is_liked").notNull().default(true),
+    createdAt: timestamp("created_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow(),
+    updatedAt: timestamp("updated_at", {
+        withTimezone: true,
+        mode: "date"
+    }).defaultNow()
+});
+```
+
+### Like Fields
+
+- **id**: Auto-generated CUID2 primary key
+- **postId**: Reference to the liked post
+- **userId**: Reference to the user who liked
+- **isLiked**: Boolean flag (defaults to `true`)
+- **createdAt/updatedAt**: Timestamps for tracking like history
+
+<Info>
+The `isLiked` field defaults to `true`, allowing the system to track both likes and potential unlikes without deleting records.
+</Info>
+
+## Relationships
+
+The schema defines the following foreign key relationships:
+
+```
+UserTable (1) ──< (N) SessionTable
+UserTable (1) ──< (N) PostTable
+UserTable (1) ──< (N) LikeTable
+PostTable (1) ──< (N) LikeTable
+```
+
+- One user can have multiple sessions
+- One user can create multiple posts
+- One user can have multiple likes
+- One post can receive multiple likes
+
+## Database Client
+
+The database client is initialized using Drizzle's Xata HTTP adapter:
+
+```typescript
+import { drizzle } from "drizzle-orm/xata-http";
+import { XataClient } from "@/xata";
+
+const xata = new XataClient();
+export const db = drizzle(xata);
+```
+
+### Usage Example
+
+```typescript
+import { db } from "@/db";
+import { UserTable } from "@/db/schema/user";
+import { eq } from "drizzle-orm";
+
+// Type-safe query
+const user = await db
+  .select()
+  .from(UserTable)
+  .where(eq(UserTable.id, userId))
+  .limit(1);
+```
+
+## Drizzle Configuration
+
+The Drizzle Kit configuration for migrations and schema management:
+
+```typescript
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+    schema: "./db/schema/*",
+    dialect: "postgresql",
+    dbCredentials: {
+        url: process.env.XATA_URL!,
+    }
+});
+```
+
+### Configuration Options
+
+- **schema**: Glob pattern matching all schema files
+- **dialect**: PostgreSQL dialect for proper SQL generation
+- **dbCredentials.url**: Connection string from environment variables
+
+<Accordion title="Running Migrations">
+Use Drizzle Kit to generate and apply migrations:
+
+```bash
+# Generate migration files
+npx drizzle-kit generate
+
+# Push changes to database
+npx drizzle-kit push
+```
+</Accordion>
+
+<Accordion title="Schema Design Patterns">
+**CUID2 for Primary Keys**: Provides collision-resistant, distributed-safe IDs
+
+**Timezone-Aware Timestamps**: All timestamps use `withTimezone: true` for global applications
+
+**Foreign Key Constraints**: Enforced at the database level for referential integrity
+
+**Optional Profile Fields**: Bio and profile URL are nullable for flexible user profiles
+</Accordion>
+
+## Best Practices
+
+1. **Always use type inference** with `$inferInsert` and `$inferSelect`
+2. **Import schema tables** from their respective files, not from a barrel export
+3. **Use the shared db instance** from `@/db/index.ts` for all queries
+4. **Handle timestamps** as JavaScript Date objects due to `mode: "date"`
+5. **Validate foreign keys** exist before insertion to avoid constraint violations

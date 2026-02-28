@@ -1,0 +1,306 @@
+---
+title: Using the TipTap Editor
+description: Complete guide to using the rich text editor features in Esoteric Network
+---
+
+The Esoteric Network editor is built on TipTap, a headless, framework-agnostic rich text editor. This guide covers all available features and formatting options.
+
+## Editor Architecture
+
+The editor is implemented in `components/editor/components/minimal-tiptap.tsx` with modular toolbar sections:
+
+```typescript
+import { useEditor, EditorContent, BubbleMenu } from '@tiptap/react';
+import StarterKit from '@tiptap/starter-kit';
+import { Link } from '@tiptap/extension-link';
+import { Image } from '@tiptap/extension-image';
+import ImageResize from 'tiptap-extension-resize-image';
+import CodeBlock from '@tiptap/extension-code-block';
+import Youtube from '@tiptap/extension-youtube';
+```
+
+## Toolbar Sections
+
+The toolbar is divided into four main sections, each handling different formatting capabilities.
+
+<Steps>
+
+### Section 1: Text Styles
+
+The first toolbar section (`section-1.tsx`) provides heading and paragraph styles:
+
+```typescript
+const toggleHeading = (level: Level) => {
+    editor.chain().focus().toggleHeading({ level }).run()
+}
+```
+
+Available styles:
+- **Normal Text** - Standard paragraph (Cmd/Ctrl + Alt + 0)
+- **Heading 1** - Largest heading (Cmd/Ctrl + Alt + 1)
+- **Heading 2** - Second-level heading (Cmd/Ctrl + Alt + 2)
+- **Heading 3** - Third-level heading (Cmd/Ctrl + Alt + 3)
+- **Heading 4** - Fourth-level heading (Cmd/Ctrl + Alt + 4)
+- **Heading 5** - Fifth-level heading (Cmd/Ctrl + Alt + 5)
+- **Heading 6** - Smallest heading (Cmd/Ctrl + Alt + 6)
+
+<Info>Text style changes cannot be applied within code blocks. The dropdown is automatically disabled when editing code.</Info>
+
+### Section 2: Text Formatting
+
+The second section (`section-2.tsx`) handles inline text formatting:
+
+```typescript
+// Bold formatting
+<ToolbarButton
+    onClick={() => editor.chain().focus().toggleBold().run()}
+    disabled={!editor.can().chain().focus().toggleBold().run()}
+    isActive={editor.isActive('bold')}
+>
+    <FontBoldIcon className="size-5" />
+</ToolbarButton>
+
+// Italic formatting
+<ToolbarButton
+    onClick={() => editor.chain().focus().toggleItalic().run()}
+    isActive={editor.isActive('italic')}
+>
+    <FontItalicIcon className="size-5" />
+</ToolbarButton>
+```
+
+Formatting options:
+- **Bold** - Make text bold (Cmd/Ctrl + B)
+- **Italic** - Italicize text (Cmd/Ctrl + I)
+- **Strikethrough** - Strike through text (Cmd/Ctrl + Shift + S)
+- **Code** - Inline code formatting (Cmd/Ctrl + E)
+- **Clear Formatting** - Remove all formatting marks
+
+<Tip>Use the "More formatting" dropdown (three dots icon) to access strikethrough, inline code, and clear formatting options.</Tip>
+
+### Section 3: Lists
+
+The third section (`section-3.tsx`) provides list formatting:
+
+```typescript
+// Toggle ordered list
+<DropdownMenuItem
+    onClick={() => editor.chain().focus().toggleOrderedList().run()}
+    className={cn(DropdownMenuItemClass, { 
+        [activeItemClass]: editor.isActive('orderedList') 
+    })}
+>
+    <span className="grow">Numbered list</span>
+    <ShortcutKey keys={['mod', 'shift', '7']} />
+</DropdownMenuItem>
+
+// Toggle bullet list
+<DropdownMenuItem
+    onClick={() => editor.chain().focus().toggleBulletList().run()}
+>
+    <span className="grow">Bullet list</span>
+    <ShortcutKey keys={['mod', 'shift', '8']} />
+</DropdownMenuItem>
+```
+
+List types:
+- **Numbered List** - Ordered list with automatic numbering (Cmd/Ctrl + Shift + 7)
+- **Bullet List** - Unordered list with bullet points (Cmd/Ctrl + Shift + 8)
+
+### Section 4: Advanced Features
+
+The fourth section provides image, link, and code block insertion. See the respective sections below for details.
+
+</Steps>
+
+## Bubble Menu
+
+When you select text, a floating bubble menu appears with quick formatting options:
+
+```typescript
+<BubbleMenu editor={editor} tippyOptions={{ duration: 100 }}>
+    <ToggleGroup type="multiple" className="bg-primary-foreground">
+        <ToggleGroupItem value="bold" 
+            onClick={() => editor.chain().focus().toggleBold().run()}
+        >
+            <FontBoldIcon className="h-4 w-4" />
+        </ToggleGroupItem>
+        <ToggleGroupItem value="italic"
+            onClick={() => editor.chain().focus().toggleItalic().run()}
+        >
+            <ItalicIcon className="h-4 w-4" />
+        </ToggleGroupItem>
+        <ToggleGroupItem value="strike"
+            onClick={() => editor.chain().focus().toggleStrike().run()}
+        >
+            <Strikethrough className="h-4 w-4" />
+        </ToggleGroupItem>
+    </ToggleGroup>
+</BubbleMenu>
+```
+
+<Info>The bubble menu appears only when text is selected and provides quick access to Bold, Italic, and Strikethrough formatting.</Info>
+
+## Working with Links
+
+The editor includes advanced link handling with a custom click behavior:
+
+```typescript
+Link.configure({
+    openOnClick: false,
+}).extend({
+    inclusive: false,
+    addProseMirrorPlugins() {
+        return [
+            new Plugin({
+                props: {
+                    handleClick(view, pos) {
+                        const { schema, doc, tr } = view.state;
+                        const range = getMarkRange(doc.resolve(pos), schema.marks.link);
+                        if (!range) return;
+                        const { from, to } = range;
+                        // Auto-select link on click
+                        const transaction = tr.setSelection(
+                            new TextSelection($start, $end)
+                        );
+                        view.dispatch(transaction);
+                    },
+                },
+            }),
+        ];
+    },
+})
+```
+
+Features:
+- Click a link to select it for editing
+- Use the `LinkBubbleMenu` component to edit or remove links
+- Links won't open when clicked in edit mode
+
+## Working with Images
+
+Images support resizing and custom positioning:
+
+```typescript
+import ImageResize from 'tiptap-extension-resize-image';
+
+const editor = useEditor({
+    extensions: [
+        StarterKit,
+        ImageResize,
+        // ...
+    ]
+});
+```
+
+Image capabilities:
+- Drag and drop image upload
+- Click and drag to resize images
+- Image bubble menu for editing and deletion
+- Custom image view blocks for rendering
+
+<Warning>Image uploads require proper server-side handling and storage configuration.</Warning>
+
+## YouTube Embeds
+
+Embed YouTube videos directly in your posts:
+
+```typescript
+Youtube.configure({
+    controls: true,
+    nocookie: true,
+})
+```
+
+The YouTube extension:
+- Shows video player controls
+- Uses privacy-enhanced mode (nocookie)
+- Allows responsive video sizing
+- Supports standard YouTube URLs
+
+## Code Blocks
+
+Add syntax-highlighted code blocks:
+
+```typescript
+import CodeBlock from '@tiptap/extension-code-block';
+
+const editor = useEditor({
+    extensions: [
+        CodeBlock,
+        // ...
+    ]
+});
+```
+
+<Tip>Most formatting options are automatically disabled when your cursor is inside a code block to prevent unwanted formatting.</Tip>
+
+## Editor Props
+
+The editor accepts several configuration props:
+
+```typescript
+export interface MinimalTiptapProps {
+    value?: string | null;              // Current editor value
+    outputValue?: 'html' | 'json' | 'text';  // Output format
+    disabled?: boolean;                 // Disable editing
+    contentClass?: string;              // Custom CSS classes
+    onValueChange: (value: string) => void;  // Change handler
+    initialContent?: string | null;     // Initial content to load
+}
+```
+
+Example usage:
+
+```tsx
+<MinimalTiptapEditor
+    value={value}
+    onValueChange={setValue}
+    outputValue="json"
+    disabled={false}
+    contentClass="mt-8"
+    initialContent={existingPost?.content}
+/>
+```
+
+## Loading Existing Content
+
+When editing existing posts, content is loaded after the editor initializes:
+
+```typescript
+useEffect(() => {
+    if (editor && initialContent) {
+        try {
+            const parsedContent = JSON.parse(initialContent);
+            editor.commands.setContent(parsedContent);
+        } catch (error) {
+            // Handle parse errors
+        }
+    }
+}, [editor, initialContent]);
+```
+
+## Output Formats
+
+The editor can output content in three formats:
+
+- **JSON**: Structured document format (recommended for storage)
+- **HTML**: Rendered HTML output
+- **Text**: Plain text without formatting
+
+The output format is controlled by the `outputValue` prop and processed by the `getOutput` utility function.
+
+## Accessibility
+
+The editor includes proper accessibility attributes:
+
+- All toolbar buttons have `aria-label` attributes
+- Keyboard shortcuts are documented with `ShortcutKey` components
+- Focus management is handled automatically
+- Screen reader friendly markup
+
+## Next Steps
+
+- Learn about [Creating Posts](/guides/creating-posts)
+- Explore post editing and deletion
+- Understand content storage and retrieval

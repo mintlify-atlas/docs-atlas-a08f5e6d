@@ -1,0 +1,162 @@
+---
+title: "Architecture Overview"
+description: "Technical architecture and stack overview for Esoteric Network"
+---
+
+## Stack Overview
+
+Esoteric Network is built with a modern TypeScript stack, leveraging Next.js for the frontend and backend, with Xata as the serverless PostgreSQL database.
+
+### Core Technologies
+
+- **Framework**: Next.js (App Router)
+- **Language**: TypeScript
+- **Database**: Xata (Serverless PostgreSQL)
+- **ORM**: Drizzle ORM
+- **Authentication**: Lucia
+- **ID Generation**: CUID2 via `@paralleldrive/cuid2`
+
+<Note>
+The application uses Xata's HTTP adapter for Drizzle ORM, enabling serverless-friendly database connections without persistent connection pools.
+</Note>
+
+## System Architecture
+
+The application follows a layered architecture pattern:
+
+```
+┌─────────────────────────────────────────┐
+│         Next.js App Router              │
+│     (Server Components + Actions)       │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│      Authentication Layer (Lucia)       │
+│   - Session Management                  │
+│   - User Validation                     │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│       Data Access Layer (Drizzle)       │
+│   - Type-safe queries                   │
+│   - Schema definitions                  │
+└──────────────┬──────────────────────────┘
+               │
+┌──────────────▼──────────────────────────┐
+│      Database Layer (Xata)              │
+│   - PostgreSQL storage                  │
+│   - Serverless scaling                  │
+└─────────────────────────────────────────┘
+```
+
+## Database Connection
+
+The database client is initialized using Drizzle's Xata HTTP adapter:
+
+```typescript
+import { drizzle } from "drizzle-orm/xata-http";
+import { XataClient } from "@/xata";
+
+const xata = new XataClient();
+export const db = drizzle(xata);
+```
+
+<Info>
+This pattern creates a single database instance that's imported throughout the application, ensuring consistent database access patterns.
+</Info>
+
+## Configuration Management
+
+Drizzle is configured via `drizzle.config.ts`:
+
+```typescript
+import { defineConfig } from "drizzle-kit";
+
+export default defineConfig({
+    schema: "./db/schema/*",
+    dialect: "postgresql",
+    dbCredentials: {
+        url: process.env.XATA_URL!,
+    }
+});
+```
+
+### Environment Variables
+
+The application requires the following environment variables:
+
+- `XATA_API_KEY` - Xata API authentication key
+- `XATA_HTTPS_URL` - Xata database HTTPS endpoint
+- `XATA_URL` - Xata database URL (PostgreSQL connection string)
+- `XATA_BRANCH` - Database branch (defaults to "main")
+- `NODE_ENV` - Environment mode (development/production)
+
+## Xata Client Configuration
+
+The Xata client supports automatic deploy preview branching:
+
+```typescript
+export class XataClient extends DatabaseClient<DatabaseSchema> {
+  constructor(options?: BaseClientOptions) {
+    super(
+      {
+        apiKey: process.env.XATA_API_KEY,
+        databaseURL: process.env.XATA_HTTPS_URL,
+        // Use deploy preview branch if available
+        branch:
+          getDeployPreviewBranch(process.env) ??
+          process.env.XATA_BRANCH ??
+          "main",
+        ...options,
+      },
+      tables
+    );
+  }
+}
+```
+
+<Warning>
+The Xata client automatically selects the appropriate database branch based on deployment context, enabling preview environments to have isolated database branches.
+</Warning>
+
+## Type Safety
+
+The architecture emphasizes end-to-end type safety:
+
+- **Schema Types**: Drizzle generates TypeScript types from schema definitions
+- **Xata Types**: Auto-generated types from Xata schema
+- **Lucia Types**: Module augmentation for type-safe user attributes
+
+```typescript
+// Drizzle type inference
+export type InsertUser = typeof UserTable.$inferInsert
+export type SelectUser = typeof UserTable.$inferSelect
+
+// Xata type inference
+export type User = InferredTypes["user"];
+export type UserRecord = User & XataRecord;
+```
+
+## Key Design Decisions
+
+<Accordion title="Why Xata with Drizzle?">
+Xata provides serverless PostgreSQL with built-in branching for preview environments. Drizzle ORM adds type-safe query building while maintaining compatibility with Xata's HTTP adapter.
+</Accordion>
+
+<Accordion title="Why CUID2 for IDs?">
+CUID2 generates collision-resistant, URL-safe IDs that are horizontally scalable and don't reveal creation order, making them ideal for distributed systems.
+</Accordion>
+
+<Accordion title="Why Lucia for authentication?">
+Lucia is a lightweight, type-safe authentication library that gives full control over session management without the overhead of larger solutions like NextAuth.
+</Accordion>
+
+## Data Flow
+
+1. **Request** → Next.js Server Component/Action
+2. **Authentication** → Session validation via Lucia
+3. **Data Access** → Type-safe Drizzle queries
+4. **Database** → Xata PostgreSQL via HTTP adapter
+5. **Response** → Typed data back to component
+
+This architecture ensures type safety at every layer while maintaining serverless compatibility and optimal developer experience.
