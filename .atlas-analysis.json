@@ -1,0 +1,96 @@
+{
+  "projectType": "saas",
+  "projectName": "Esoteric Network",
+  "projectDescription": "A social platform for sharing esoteric writings, art, and philosophies with fellow spiritual seekers.",
+  "theme": "almond",
+  "primaryColor": "#7C3AED",
+  "lightColor": "#A78BFA",
+  "darkColor": "#5B21B6",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/authentication",
+              "features/posts",
+              "features/profiles",
+              "features/social-interactions"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-posts",
+              "guides/using-editor",
+              "guides/managing-profile"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/database",
+              "architecture/authentication"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Server Actions",
+            "pages": [
+              "api/posts",
+              "api/users",
+              "api/likes"
+            ]
+          },
+          {
+            "group": "Database Schema",
+            "pages": [
+              "api/schema/users",
+              "api/schema/posts",
+              "api/schema/sessions"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "User authentication with Lucia and Argon2 password hashing",
+    "Rich text post editor with TipTap (supports images, YouTube embeds, code blocks)",
+    "User profiles with customizable bios and avatars",
+    "Social interactions (likes and engagement)",
+    "Drizzle ORM with PostgreSQL database",
+    "Xata database integration",
+    "Theme support (light/dark mode)",
+    "Image uploads with Vercel Blob storage"
+  ],
+  "publicApiSurface": [
+    "SignupUserAction",
+    "SigninUserAction",
+    "SignoutUserAction",
+    "UpdateUserAction",
+    "UpdateUserImageAction",
+    "CreatePostAction",
+    "EditPostAction",
+    "DeletePostAction",
+    "ModifyLikeAction",
+    "UserTable schema",
+    "PostTable schema",
+    "SessionTable schema",
+    "LikeTable schema"
+  ]
+}
